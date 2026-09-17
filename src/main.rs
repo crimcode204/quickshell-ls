@@ -2,6 +2,7 @@ use tower_lsp::{LspService, Server};
 
 use crate::ls::QuickshellLanguageServer;
 
+mod doc_state;
 mod ls;
 
 #[tokio::main]
