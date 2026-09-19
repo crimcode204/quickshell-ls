@@ -79,9 +79,17 @@ impl LanguageServer for QuickshellLanguageServer {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
+
         if let Some(mut doc_state) = self.documents_map.get_mut(&uri) {
             let mut parser = self.parser.lock().await;
             doc_state.update(params.content_changes, &mut parser);
+
+            self.client
+                .log_message(
+                    MessageType::LOG,
+                    format!("{}\n{}\n", uri, doc_state.print_symbols()),
+                )
+                .await;
         }
     }
 
