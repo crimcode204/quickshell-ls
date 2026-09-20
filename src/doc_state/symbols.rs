@@ -23,6 +23,7 @@ pub static _LOCALS_QUERY: LazyLock<Query> = LazyLock::new(|| {
 });
 
 impl DocState {
+    /// Returns a symbol with the specified name if it exists.
     pub fn find_symbol_by_name(&self, name: &str) -> Option<&DocSymbol> {
         fn search<'a>(symbols: &'a [DocSymbol], target: &str) -> Option<&'a DocSymbol> {
             for symbol in symbols {
@@ -39,6 +40,7 @@ impl DocState {
         search(&self.symbols, name)
     }
 
+    /// Creates a symbol tree based on a given text sequence and its AST.
     pub(crate) fn build_symbols_tree(text: &Rope, tree: &Tree) -> Vec<DocSymbol> {
         let mut symbols = Vec::new();
 
@@ -137,6 +139,7 @@ fn print_symbol(symbol: &DocSymbol, depth: usize) -> String {
     result
 }
 
+/// Converts a [`tree_sitter::Point`] to a [`tower_lsp::lsp_types::Position`].
 fn ts_point_to_pos(point: tree_sitter::Point) -> tower_lsp::lsp_types::Position {
     tower_lsp::lsp_types::Position::new(point.row as u32, point.column as u32)
 }

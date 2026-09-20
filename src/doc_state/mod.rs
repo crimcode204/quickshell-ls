@@ -3,7 +3,7 @@ use tower_lsp::lsp_types::TextDocumentContentChangeEvent;
 
 use crate::doc_state::doc_symbol::DocSymbol;
 
-pub mod doc_symbol;
+mod doc_symbol;
 mod hover;
 mod symbols;
 
@@ -14,6 +14,7 @@ pub struct DocState {
 }
 
 impl DocState {
+    /// Returns a new document state, with populated [`tree_sitter::Tree`] and symbols tree.
     pub fn new(text: String, parser: &mut tree_sitter::Parser) -> Self {
         let tree = parser.parse(&text, None).unwrap();
         let rope = Rope::from(text);
@@ -26,6 +27,7 @@ impl DocState {
         }
     }
 
+    /// Updates the document state based on a list of changes.
     pub fn update(
         &mut self,
         changes: Vec<TextDocumentContentChangeEvent>,
@@ -90,7 +92,8 @@ impl DocState {
         self.symbols = DocState::build_symbols_tree(&self.text, &self.tree)
     }
 
-    pub fn get_node_at(
+    /// Returns an AST node corresponding to a specified LSP position.
+    pub fn node_at(
         &self,
         position: tower_lsp::lsp_types::Position,
     ) -> Option<tree_sitter::Node<'_>> {
@@ -101,10 +104,8 @@ impl DocState {
             .named_descendant_for_point_range(point, point)
     }
 
-    // maybe name this better
-    pub fn get_text_for_node(&self, node: &tree_sitter::Node) -> String {
-        self.text
-            .byte_slice(node.start_byte()..node.end_byte())
-            .to_string()
+    /// Returns the source text corresponding to the byte range of a given node.
+    pub fn node_text(&self, node: &tree_sitter::Node) -> String {
+        self.text.byte_slice(node.byte_range()).to_string()
     }
 }
