@@ -1,7 +1,9 @@
 use std::{fmt::Display, sync::LazyLock};
 
 use crop::Rope;
-use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
+use tower_lsp::lsp_types::{
+    DocumentSymbol, Position, Range, SymbolKind, TextDocumentContentChangeEvent,
+};
 use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 
 pub static SYMBOLS_QUERY: LazyLock<Query> = LazyLock::new(|| {
@@ -11,54 +13,79 @@ pub static SYMBOLS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(&language, query_string).expect("Failed to compile symbols query")
 });
 
-pub static LOCALS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+pub static _LOCALS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     let language = tree_sitter_qmljs::LANGUAGE.into();
     let query_string = include_str!("../queries/locals.scm");
 
     Query::new(&language, query_string).expect("Failed to compile locals query")
 });
 
-pub struct DocumentState {
+pub struct DocState {
     text: Rope,
     tree: Tree,
-    symbols: Vec<Symbol>,
+    pub symbols: Vec<DocSymbol>,
 }
 
-struct Symbol {
+pub struct DocSymbol {
     name: String,
-    kind: SymbolKind,
+    kind: DocSymbolKind,
     range: Range,
     selection_range: Range,
     detail: Option<String>,
-    documentation: Option<String>,
-    children: Vec<Symbol>,
+    _documentation: Option<String>,
+    children: Vec<DocSymbol>,
+}
+
+impl From<&DocSymbol> for DocumentSymbol {
+    fn from(value: &DocSymbol) -> Self {
+        #[allow(deprecated)]
+        DocumentSymbol {
+            name: value.name.clone(),
+            detail: value.detail.clone(),
+            kind: match value.kind {
+                DocSymbolKind::Component => SymbolKind::CLASS,
+                DocSymbolKind::Property => SymbolKind::PROPERTY,
+                DocSymbolKind::Signal => SymbolKind::EVENT,
+                DocSymbolKind::Id => SymbolKind::VARIABLE,
+            },
+            tags: None,
+            deprecated: None,
+            range: value.range,
+            selection_range: value.selection_range,
+            children: if value.children.is_empty() {
+                None
+            } else {
+                Some(value.children.iter().map(Self::from).collect())
+            },
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
-enum SymbolKind {
+enum DocSymbolKind {
     Component,
     Property,
     Signal,
     Id,
 }
 
-impl Display for SymbolKind {
+impl Display for DocSymbolKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kind_string = match self {
-            SymbolKind::Component => "Component".to_string(),
-            SymbolKind::Property => "Property".to_string(),
-            SymbolKind::Signal => "Signal".to_string(),
-            SymbolKind::Id => "Id".to_string(),
+            DocSymbolKind::Component => "Component".to_string(),
+            DocSymbolKind::Property => "Property".to_string(),
+            DocSymbolKind::Signal => "Signal".to_string(),
+            DocSymbolKind::Id => "Id".to_string(),
         };
         write!(f, "{kind_string}")
     }
 }
 
-impl DocumentState {
+impl DocState {
     pub fn new(text: String, parser: &mut Parser) -> Self {
         let tree = parser.parse(&text, None).unwrap();
         let rope = Rope::from(text);
-        let symbols = DocumentState::build_symbols_tree(&rope, &tree);
+        let symbols = DocState::build_symbols_tree(&rope, &tree);
 
         Self {
             text: rope,
@@ -120,15 +147,14 @@ impl DocumentState {
 
         if !is_parsed {
             let text = self.text.to_string();
-            let mut text_callback =
-                |byte_offset: usize, position: Point| &text.as_bytes()[byte_offset..];
+            let mut text_callback = |byte_offset: usize, _: Point| &text.as_bytes()[byte_offset..];
 
             self.tree = parser
                 .parse_with_options(&mut text_callback, Some(&self.tree), None)
                 .unwrap();
         }
 
-        self.symbols = DocumentState::build_symbols_tree(&self.text, &self.tree)
+        self.symbols = DocState::build_symbols_tree(&self.text, &self.tree)
     }
 
     pub fn print_symbols(&self) -> String {
@@ -139,7 +165,7 @@ impl DocumentState {
         result
     }
 
-    fn build_symbols_tree(text: &Rope, tree: &Tree) -> Vec<Symbol> {
+    fn build_symbols_tree(text: &Rope, tree: &Tree) -> Vec<DocSymbol> {
         let mut symbols = Vec::new();
 
         let text_provider = |node: Node| {
@@ -148,7 +174,7 @@ impl DocumentState {
                 .chunks()
                 .map(|chunk| chunk.as_bytes())
         };
-        let mut parent_stack: Vec<(Symbol, usize)> = Vec::new();
+        let mut parent_stack: Vec<(DocSymbol, usize)> = Vec::new();
 
         let mut cursor = QueryCursor::new();
         cursor
@@ -160,10 +186,10 @@ impl DocumentState {
 
                     let name: String = text.byte_slice(node.byte_range()).to_string();
                     let kind = match SYMBOLS_QUERY.capture_names()[capture.index as usize] {
-                        "property" | "property.name" => SymbolKind::Property,
-                        "component.name" => SymbolKind::Component,
-                        "variable.parameter" => SymbolKind::Id,
-                        "function.signal" => SymbolKind::Signal,
+                        "property" | "property.name" => DocSymbolKind::Property,
+                        "component.name" => DocSymbolKind::Component,
+                        "variable.parameter" => DocSymbolKind::Id,
+                        "function.signal" => DocSymbolKind::Signal,
                         _ => return,
                     };
                     let selection_range = Range {
@@ -175,13 +201,13 @@ impl DocumentState {
                         end: ts_point_to_pos(block_node.end_position()),
                     };
 
-                    let symbol = Symbol {
+                    let symbol = DocSymbol {
                         name,
                         kind: kind.clone(),
                         range,
                         selection_range,
                         detail: None,
-                        documentation: None,
+                        _documentation: None,
                         children: Vec::new(),
                     };
 
@@ -196,7 +222,7 @@ impl DocumentState {
                         }
                     }
 
-                    if kind == SymbolKind::Component {
+                    if kind == DocSymbolKind::Component {
                         parent_stack.push((symbol, block_node.byte_range().end))
                     } else if let Some((parent, _)) = parent_stack.last_mut() {
                         parent.children.push(symbol);
@@ -218,7 +244,7 @@ impl DocumentState {
     }
 }
 
-fn print_symbol(symbol: &Symbol, depth: usize) -> String {
+fn print_symbol(symbol: &DocSymbol, depth: usize) -> String {
     let mut result: String = format!("{}{}: {}\n", "  ".repeat(depth), symbol.kind, symbol.name);
 
     symbol

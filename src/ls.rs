@@ -2,12 +2,12 @@ use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
-use crate::doc_state::DocumentState;
+use crate::doc_state::DocState;
 
 pub struct QuickshellLanguageServer {
     client: Client,
     parser: Mutex<tree_sitter::Parser>,
-    documents_map: DashMap<String, DocumentState>,
+    documents_map: DashMap<String, DocState>,
 }
 
 impl QuickshellLanguageServer {
@@ -35,6 +35,7 @@ impl LanguageServer for QuickshellLanguageServer {
                 version: Some("0.1.0".to_string()),
             }),
             capabilities: ServerCapabilities {
+                document_symbol_provider: Some(OneOf::Left(true)),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
                         open_close: Some(true),
@@ -65,7 +66,7 @@ impl LanguageServer for QuickshellLanguageServer {
 
         let text = params.text_document.text;
         let mut parser = self.parser.lock().await;
-        let doc_state = DocumentState::new(text, &mut parser);
+        let doc_state = DocState::new(text, &mut parser);
 
         self.client
             .log_message(
@@ -105,5 +106,20 @@ impl LanguageServer for QuickshellLanguageServer {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         self.documents_map.remove(&uri);
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri.to_string();
+
+        if let Some(doc_state) = self.documents_map.get(&uri) {
+            let lsp_symbols = doc_state.symbols.iter().map(DocumentSymbol::from).collect();
+
+            Ok(Some(DocumentSymbolResponse::Nested(lsp_symbols)))
+        } else {
+            Ok(None)
+        }
     }
 }
