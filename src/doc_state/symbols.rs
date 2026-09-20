@@ -118,25 +118,6 @@ impl DocState {
 
         symbols
     }
-
-    pub fn print_symbols(&self) -> String {
-        let mut result = String::new();
-        self.symbols
-            .iter()
-            .for_each(|symbol| result = format!("{}{}", result, print_symbol(symbol, 0)));
-        result
-    }
-}
-
-fn print_symbol(symbol: &DocSymbol, depth: usize) -> String {
-    let mut result: String = format!("{}{}: {}\n", "  ".repeat(depth), symbol.kind, symbol.name);
-
-    symbol
-        .children
-        .iter()
-        .for_each(|child| result = format!("{}{}", result, print_symbol(child, depth + 1)));
-
-    result
 }
 
 /// Converts a [`tree_sitter::Point`] to a [`tower_lsp::lsp_types::Position`].

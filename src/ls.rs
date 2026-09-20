@@ -68,13 +68,6 @@ impl LanguageServer for QuickshellLanguageServer {
         let mut parser = self.parser.lock().await;
         let doc_state = DocState::new(text, &mut parser);
 
-        self.client
-            .log_message(
-                MessageType::LOG,
-                format!("{}\n{}\n", uri, doc_state.print_symbols()),
-            )
-            .await;
-
         self.documents_map.insert(uri, doc_state);
     }
 
@@ -84,13 +77,6 @@ impl LanguageServer for QuickshellLanguageServer {
         if let Some(mut doc_state) = self.documents_map.get_mut(&uri) {
             let mut parser = self.parser.lock().await;
             doc_state.update(params.content_changes, &mut parser);
-
-            self.client
-                .log_message(
-                    MessageType::LOG,
-                    format!("{}\n{}\n", uri, doc_state.print_symbols()),
-                )
-                .await;
         }
     }
 
