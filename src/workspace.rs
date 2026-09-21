@@ -15,8 +15,8 @@ static QMLTYPES_QUERY: LazyLock<Query> = LazyLock::new(|| {
 });
 
 pub struct QMLProperty {
-    name: String,
-    type_name: String,
+    pub(crate) name: String,
+    pub(crate) type_name: String,
     description: Option<String>,
 }
 
@@ -39,7 +39,7 @@ pub struct QMLComponent {
     prototype: Option<String>,
     pub qml_name: Option<String>,
 
-    properties: Vec<QMLProperty>,
+    pub(crate) properties: Vec<QMLProperty>,
     signals: Vec<QMLSignal>,
     methods: Vec<QMLMethod>,
 }
