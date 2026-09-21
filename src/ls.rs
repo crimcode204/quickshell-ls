@@ -1,13 +1,20 @@
+use std::{
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
+
 use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
-use crate::doc_state::DocState;
+use crate::{doc_state::DocState, workspace::WorkspaceState};
 
 pub struct QuickshellLanguageServer {
     client: Client,
     parser: Mutex<tree_sitter::Parser>,
     documents_map: DashMap<String, DocState>,
+    workspace: Arc<WorkspaceState>,
+    root_path: OnceLock<PathBuf>,
 }
 
 impl QuickshellLanguageServer {
@@ -21,13 +28,26 @@ impl QuickshellLanguageServer {
             client,
             parser: Mutex::new(parser),
             documents_map: DashMap::new(),
+            workspace: Arc::new(WorkspaceState::new()),
+            root_path: OnceLock::new(),
         }
     }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for QuickshellLanguageServer {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let root_url = params
+            .workspace_folders
+            .and_then(|mut folders| folders.pop().map(|f| f.uri))
+            .or(params.root_uri);
+
+        if let Some(url) = root_url
+            && let Ok(path) = url.to_file_path()
+        {
+            let _ = self.root_path.set(path);
+        }
+
         Ok(InitializeResult {
             offset_encoding: None,
             server_info: Some(ServerInfo {
@@ -36,6 +56,7 @@ impl LanguageServer for QuickshellLanguageServer {
             }),
             capabilities: ServerCapabilities {
                 document_symbol_provider: Some(OneOf::Left(true)),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
                         open_close: Some(true),
@@ -52,9 +73,51 @@ impl LanguageServer for QuickshellLanguageServer {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
-            .log_message(MessageType::LOG, "server initialized!")
-            .await;
+        let workspace = self.workspace.clone();
+        let root_path = self.root_path.get().cloned();
+
+        tokio::spawn(async move {
+            if let Some(root) = root_path {
+                let ini_path = root.join(".qmlls.ini");
+
+                if let Ok(ini_content) = tokio::fs::read_to_string(&ini_path).await {
+                    for line in ini_content.lines() {
+                        let Some(import_paths) = line
+                            .strip_prefix("importPaths=")
+                            .and_then(|paths| Some(paths.trim_matches('"')))
+                        else {
+                            continue;
+                        };
+
+                        for path in import_paths.split(':') {
+                            workspace.index_directory(path).await;
+                        }
+                    }
+                }
+            }
+
+            if let Ok(qml_paths) = std::env::var("QML_IMPORT_PATH") {
+                for path in std::env::split_paths(&qml_paths) {
+                    workspace.index_directory(path).await;
+                }
+            }
+
+            let qt_paths_cmd = std::process::Command::new("qtpaths")
+                .args(["--query", "QT_INSTALL_QML"])
+                .output()
+                .or_else(|_| {
+                    std::process::Command::new("qmake")
+                        .args(["-query", "QT_INSTALL_QML"])
+                        .output()
+                });
+
+            if let Ok(output) = qt_paths_cmd
+                && output.status.success()
+                && let Ok(path_str) = String::from_utf8(output.stdout)
+            {
+                workspace.index_directory(path_str.trim()).await;
+            }
+        });
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -107,5 +170,20 @@ impl LanguageServer for QuickshellLanguageServer {
         } else {
             Ok(None)
         }
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let position = params.text_document_position_params.position;
+
+        if let Some(doc_state) = self.documents_map.get(&uri) {
+            return Ok(doc_state.hover_info(position, &self.workspace));
+        }
+
+        Ok(None)
     }
 }

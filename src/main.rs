@@ -4,6 +4,7 @@ use crate::ls::QuickshellLanguageServer;
 
 mod doc_state;
 mod ls;
+mod workspace;
 
 #[tokio::main]
 async fn main() {

@@ -8,14 +8,14 @@ use crate::doc_state::{
     doc_symbol::{DocSymbol, DocSymbolKind},
 };
 
-pub static SYMBOLS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+static SYMBOLS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     let language = tree_sitter_qmljs::LANGUAGE.into();
     let query_string = include_str!("../../queries/symbols.scm");
 
     Query::new(&language, query_string).expect("Failed to compile symbols query")
 });
 
-pub static _LOCALS_QUERY: LazyLock<Query> = LazyLock::new(|| {
+static _LOCALS_QUERY: LazyLock<Query> = LazyLock::new(|| {
     let language = tree_sitter_qmljs::LANGUAGE.into();
     let query_string = include_str!("../../queries/locals.scm");
 
