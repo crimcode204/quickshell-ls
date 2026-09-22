@@ -35,9 +35,10 @@ pub struct QMLParameter {
 }
 
 pub struct QMLComponent {
-    pub name: String,
-    prototype: Option<String>,
+    pub cpp_name: String,
     pub qml_name: Option<String>,
+    pub(crate) prototype: Option<String>,
+    pub(crate) module: Option<String>,
 
     pub(crate) properties: Vec<QMLProperty>,
     signals: Vec<QMLSignal>,
@@ -45,16 +46,17 @@ pub struct QMLComponent {
 }
 
 impl QMLComponent {
-    pub fn qml_name(&self) -> &str {
+    pub fn name(&self) -> &str {
         match &self.qml_name {
             Some(name) => name,
-            None => &self.name,
+            None => &self.cpp_name,
         }
     }
 }
 
 pub struct WorkspaceState {
-    pub components: DashMap<String, QMLComponent>,
+    components: DashMap<String, QMLComponent>,
+    cpp_to_qml: DashMap<String, String>,
 }
 
 impl WorkspaceState {
@@ -62,7 +64,27 @@ impl WorkspaceState {
     pub fn new() -> Self {
         Self {
             components: DashMap::new(),
+            cpp_to_qml: DashMap::new(),
         }
+    }
+
+    /// Returns the component with a given name
+    /// This uses the qml name, for getting a component by its cpp name use [`component_by_cpp_name()`]
+    pub fn component(
+        &self,
+        name: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, QMLComponent>> {
+        self.components.get(name)
+    }
+
+    /// Returns the component with a given name
+    /// This uses the cpp name, for getting a component by its qml name use [`component()`]
+    pub fn component_by_cpp_name(
+        &self,
+        cpp_name: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, QMLComponent>> {
+        let qml_name = self.cpp_to_qml.get(cpp_name)?.value().clone();
+        self.components.get(&qml_name)
     }
 
     pub async fn index_directory(&self, root_path: impl AsRef<Path>) {
@@ -115,23 +137,26 @@ impl WorkspaceState {
                     };
 
                     if let Some(mut registered_component) =
-                        self.components.get_mut(component.qml_name())
+                        self.components.get_mut(component.name())
                     {
                         registered_component
                             .properties
                             .append(&mut component.properties);
                     } else {
+                        self.cpp_to_qml
+                            .insert(component.cpp_name.clone(), component.name().to_string());
                         self.components
-                            .insert(component.qml_name().to_string(), component);
+                            .insert(component.name().to_string(), component);
                     }
                 }
             });
     }
 
     fn extract_component(node: Node, source: &[u8]) -> Option<QMLComponent> {
-        let name = Self::find_binding_value(node, "name", source)?;
+        let cpp_name = Self::find_binding_value(node, "name", source)?;
         let prototype = Self::find_binding_value(node, "prototype", source);
-        let qml_name = Self::resolve_qml_name(Self::find_binding_value(node, "exports", source));
+        let exports = Self::find_binding_value(node, "exports", source);
+        let (qml_name, module) = Self::resolve_qml_name_and_module(exports);
 
         let mut properties = Vec::new();
 
@@ -159,9 +184,11 @@ impl WorkspaceState {
         });
 
         Some(QMLComponent {
-            name,
+            cpp_name,
             prototype,
             qml_name,
+            module,
+
             properties,
             signals: vec![],
             methods: vec![],
@@ -203,19 +230,32 @@ impl WorkspaceState {
     }
 
     /// Extracts the latest QML name from a list of exports
-    fn resolve_qml_name(raw_exports: Option<String>) -> Option<String> {
-        let binding = raw_exports?;
+    fn resolve_qml_name_and_module(
+        raw_exports: Option<String>,
+    ) -> (Option<String>, Option<String>) {
+        let Some(binding) = raw_exports else {
+            return (None, None);
+        };
 
         // Skip first empty match, jump over separating commas
         let exports = binding.split('"').skip(1).step_by(2);
 
-        let last_export = exports.last()?;
-        last_export
-            .split(' ')
-            .next()?
-            .split('/')
-            .last()
-            .map(String::from)
+        let Some(last_export) = exports.last() else {
+            return (None, None);
+        };
+        let Some(name_and_module) = last_export.split(' ').next() else {
+            return (None, None);
+        };
+
+        let mut parts = name_and_module.split('/');
+        let first = parts.next();
+        let second = parts.next();
+
+        match (first, second) {
+            (Some(module), Some(name)) => (Some(name.to_string()), Some(module.to_string())),
+            (Some(name), None) => (Some(name.to_string()), None),
+            _ => (None, None),
+        }
     }
 }
 
