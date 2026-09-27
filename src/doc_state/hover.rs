@@ -4,7 +4,7 @@ use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::{
     doc_state::DocState,
-    workspace::{QMLComponent, WorkspaceState},
+    workspace::{QMLComponent, WorkspaceState, ts_kinds},
 };
 
 static JSON_QT_DOCS: &str = include_str!("../../data/qt_docs.json");
@@ -20,8 +20,22 @@ impl DocState {
         let node = self.node_at(position)?;
         let name = self.node_text(&node);
 
-        if let Some(global_component) = workspace.component(&name) {
-            return Some(Self::component_hover_info(&global_component, workspace));
+        if node.parent()?.kind() == ts_kinds::UI_BINDING {
+            let mut current_block = node.parent()?;
+            while current_block.kind() != ts_kinds::UI_OBJECT_DEFINITION {
+                current_block = current_block.parent()?;
+            }
+
+            let type_node = current_block.child_by_field_name("type_name")?;
+            let parent_component_name = self.node_text(&type_node);
+
+            if let Some(component) = workspace.component(&parent_component_name) {
+                return Self::property_hover_info(&name, &component, workspace);
+            }
+        }
+
+        if let Some(component) = workspace.component(&name) {
+            return Some(Self::component_hover_info(&component, workspace));
         }
 
         None
@@ -56,5 +70,37 @@ impl DocState {
             }),
             range: None,
         };
+    }
+
+    fn property_hover_info(
+        prop_name: &str,
+        component: &QMLComponent,
+        workspace: &WorkspaceState,
+    ) -> Option<Hover> {
+        let mut current_proto = Some(component.cpp_name.clone());
+
+        while let Some(proto_cpp) = current_proto {
+            let Some(parent_comp) = workspace.component_by_cpp_name(&proto_cpp) else {
+                break;
+            };
+            if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == prop_name) {
+                let markdown = format!(
+                    "```qml\n(property) {}: {}\n```\n*Defined in `{}`*",
+                    prop.name,
+                    prop.type_name,
+                    parent_comp.name(),
+                );
+
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: markdown,
+                    }),
+                    range: None,
+                });
+            }
+            current_proto = parent_comp.prototype.clone();
+        }
+        None
     }
 }

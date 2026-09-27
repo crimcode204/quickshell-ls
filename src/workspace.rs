@@ -259,7 +259,7 @@ impl WorkspaceState {
     }
 }
 
-mod ts_kinds {
+pub(crate) mod ts_kinds {
     pub const UI_OBJECT_DEFINITION: &str = "ui_object_definition";
     pub const UI_OBJECT_INITIALIZER: &str = "ui_object_initializer";
     pub const UI_BINDING: &str = "ui_binding";
