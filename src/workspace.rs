@@ -119,7 +119,20 @@ impl WorkspaceState {
                         && file_stem.chars().next().map_or(false, |c| c.is_uppercase())
                         && let Ok(content) = tokio::fs::read_to_string(&path).await
                     {
-                        self.parse_qml_file(&content, file_stem);
+                        let module_name = path
+                            .parent()
+                            .and_then(|p| p.strip_prefix(&root_path).ok())
+                            .and_then(|p| p.to_str())
+                            .map(|p| {
+                                if p.is_empty() {
+                                    "qs".to_string()
+                                } else {
+                                    format!("qs.{}", p).replace("/", ".")
+                                }
+                            })
+                            .unwrap_or_else(|| "Local Project".to_string());
+
+                        self.parse_qml_file(&content, file_stem, &module_name);
                     }
                 }
             }
@@ -169,7 +182,7 @@ impl WorkspaceState {
             });
     }
 
-    pub fn parse_qml_file(&self, source: &str, file_name: &str) {
+    pub fn parse_qml_file(&self, source: &str, file_name: &str, module_name: &str) {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_qmljs::LANGUAGE.into())
@@ -232,7 +245,7 @@ impl WorkspaceState {
             cpp_name: file_name.to_string(),
             qml_name: Some(file_name.to_string()),
             prototype,
-            module: Some("Local".to_string()),
+            module: Some(module_name.to_string()),
             properties,
             signals: vec![],
             methods: vec![],
