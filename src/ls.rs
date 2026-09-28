@@ -12,7 +12,7 @@ use crate::{doc_state::DocState, workspace::WorkspaceState};
 pub struct QuickshellLanguageServer {
     client: Client,
     parser: Mutex<tree_sitter::Parser>,
-    documents: DashMap<String, DocState>,
+    documents: DashMap<Url, DocState>,
     workspace: Arc<WorkspaceState>,
     root_path: OnceLock<PathBuf>,
 }
@@ -126,7 +126,7 @@ impl LanguageServer for QuickshellLanguageServer {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri;
 
         let text = params.text_document.text;
         let mut parser = self.parser.lock().await;
@@ -136,7 +136,7 @@ impl LanguageServer for QuickshellLanguageServer {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri;
 
         if let Some(mut doc_state) = self.documents.get_mut(&uri) {
             let mut parser = self.parser.lock().await;
@@ -147,7 +147,7 @@ impl LanguageServer for QuickshellLanguageServer {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        if let Some(doc_state) = self.documents.get(&uri.to_string())
+        if let Some(doc_state) = self.documents.get(&uri)
             && let Ok(file_path) = uri.to_file_path()
             && let Some(root_path) = self.root_path.get()
         {
@@ -157,7 +157,7 @@ impl LanguageServer for QuickshellLanguageServer {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri;
         self.documents.remove(&uri);
     }
 
@@ -165,7 +165,7 @@ impl LanguageServer for QuickshellLanguageServer {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        let uri = params.text_document.uri.to_string();
+        let uri = params.text_document.uri;
 
         if let Some(doc_state) = self.documents.get(&uri) {
             let lsp_symbols = doc_state.symbols.iter().map(DocumentSymbol::from).collect();
@@ -177,11 +177,7 @@ impl LanguageServer for QuickshellLanguageServer {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let uri = params
-            .text_document_position_params
-            .text_document
-            .uri
-            .to_string();
+        let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
         if let Some(doc_state) = self.documents.get(&uri) {
