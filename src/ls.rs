@@ -78,8 +78,9 @@ impl LanguageServer for QuickshellLanguageServer {
 
         tokio::spawn(async move {
             if let Some(root) = root_path {
-                let ini_path = root.join(".qmlls.ini");
+                workspace.index_directory(&root).await;
 
+                let ini_path = root.join(".qmlls.ini");
                 if let Ok(ini_content) = tokio::fs::read_to_string(&ini_path).await {
                     for line in ini_content.lines() {
                         let Some(import_paths) = line

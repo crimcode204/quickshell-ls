@@ -77,14 +77,16 @@ impl WorkspaceState {
         self.components.get(name)
     }
 
-    /// Returns the component with a given name
-    /// This uses the cpp name, for getting a component by its qml name use [`component()`]
-    pub fn component_by_cpp_name(
+    /// Resolves a prototype name
+    /// Prototype names have 2 forms: C++ (builtin types) or QML (local files)
+    pub fn resolve_prototype(
         &self,
-        cpp_name: &str,
+        proto_name: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, QMLComponent>> {
-        let qml_name = self.cpp_to_qml.get(cpp_name)?.value().clone();
-        self.components.get(&qml_name)
+        if let Some(translated_qml_name) = self.cpp_to_qml.get(proto_name) {
+            return self.components.get(translated_qml_name.value());
+        }
+        self.components.get(proto_name)
     }
 
     pub async fn index_directory(&self, root_path: impl AsRef<Path>) {
@@ -94,15 +96,30 @@ impl WorkspaceState {
             let Ok(mut entries) = fs::read_dir(dir).await else {
                 continue;
             };
+
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
-                if let Ok(file_type) = entry.file_type().await {
-                    if file_type.is_dir() {
-                        dirs_to_visit.push(path);
-                    } else if path.extension().and_then(|ext| ext.to_str()) == Some("qmltypes") {
-                        if let Ok(content) = fs::read_to_string(&path).await {
-                            self.parse_qmltypes(&content);
-                        }
+                let Ok(file_type) = entry.file_type().await else {
+                    continue;
+                };
+                if file_type.is_dir() {
+                    dirs_to_visit.push(path);
+                    continue;
+                }
+
+                let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+                    continue;
+                };
+                if extension == "qmltypes" {
+                    if let Ok(content) = fs::read_to_string(&path).await {
+                        self.parse_qmltypes(&content);
+                    }
+                } else if extension == "qml" {
+                    if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str())
+                        && file_stem.chars().next().map_or(false, |c| c.is_uppercase())
+                        && let Ok(content) = tokio::fs::read_to_string(&path).await
+                    {
+                        self.parse_qml_file(&content, file_stem);
                     }
                 }
             }
@@ -116,9 +133,9 @@ impl WorkspaceState {
             .unwrap();
 
         let tree = parser.parse(source, None).unwrap();
-        let mut cursor = QueryCursor::new();
         let text_bytes = source.as_bytes();
 
+        let mut cursor = QueryCursor::new();
         cursor
             .captures(&QMLTYPES_QUERY, tree.root_node(), text_bytes)
             .for_each(|(capture_match, idx)| {
@@ -150,6 +167,77 @@ impl WorkspaceState {
                     }
                 }
             });
+    }
+
+    pub fn parse_qml_file(&self, source: &str, file_name: &str) {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_qmljs::LANGUAGE.into())
+            .unwrap();
+
+        let tree = parser.parse(source, None).unwrap();
+        let text_bytes = source.as_bytes();
+
+        let root_node = tree.root_node();
+        let mut cursor = root_node.walk();
+
+        let Some(root_object) = root_node
+            .children(&mut cursor)
+            .find(|n| n.kind() == ts_kinds::UI_OBJECT_DEFINITION)
+        else {
+            return;
+        };
+
+        let prototype = root_object
+            .child_by_field_name("type_name")
+            .and_then(|n| n.utf8_text(text_bytes).ok())
+            .map(String::from);
+
+        let mut properties = Vec::new();
+
+        if let Some(initializer) = root_object
+            .children(&mut root_object.walk())
+            .find(|n| n.kind() == ts_kinds::UI_OBJECT_INITIALIZER)
+        {
+            let mut init_cursor = initializer.walk();
+            initializer.children(&mut init_cursor).for_each(|child| {
+                if child.kind() != ts_kinds::UI_PROPERTY_DECLARATION {
+                    return;
+                }
+
+                let Some(name) = child
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(text_bytes).ok())
+                    .map(String::from)
+                else {
+                    return;
+                };
+
+                let type_name = child
+                    .child_by_field_name("type")
+                    .or_else(|| child.child_by_field_name("type_name"))
+                    .and_then(|n| n.utf8_text(text_bytes).ok())
+                    .unwrap_or("var")
+                    .to_string();
+
+                properties.push(QMLProperty {
+                    name,
+                    type_name,
+                    description: None,
+                });
+            });
+        }
+
+        let component = QMLComponent {
+            cpp_name: file_name.to_string(),
+            qml_name: Some(file_name.to_string()),
+            prototype,
+            module: Some("Local".to_string()),
+            properties,
+            signals: vec![],
+            methods: vec![],
+        };
+        self.components.insert(file_name.to_string(), component);
     }
 
     fn extract_component(node: Node, source: &[u8]) -> Option<QMLComponent> {
@@ -260,8 +348,9 @@ impl WorkspaceState {
 }
 
 pub(crate) mod ts_kinds {
-    pub const UI_OBJECT_DEFINITION: &str = "ui_object_definition";
+    pub const UI_PROPERTY_DECLARATION: &str = "ui_property_declaration";
     pub const UI_OBJECT_INITIALIZER: &str = "ui_object_initializer";
+    pub const UI_OBJECT_DEFINITION: &str = "ui_object_definition";
     pub const UI_BINDING: &str = "ui_binding";
     pub const IDENTIFIER: &str = "identifier";
 }

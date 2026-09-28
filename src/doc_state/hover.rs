@@ -48,7 +48,7 @@ impl DocState {
         };
         let component_md = format!("component {}", component.name());
         let proto_md = match &component.prototype {
-            Some(proto) => match workspace.component_by_cpp_name(proto) {
+            Some(proto_name) => match workspace.resolve_prototype(proto_name) {
                 Some(p) => format!(" : {}", p.name()),
                 None => "".to_string(),
             },
@@ -79,8 +79,8 @@ impl DocState {
     ) -> Option<Hover> {
         let mut current_proto = Some(component.cpp_name.clone());
 
-        while let Some(proto_cpp) = current_proto {
-            let Some(parent_comp) = workspace.component_by_cpp_name(&proto_cpp) else {
+        while let Some(proto_name) = current_proto {
+            let Some(parent_comp) = workspace.resolve_prototype(&proto_name) else {
                 break;
             };
             if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == prop_name) {
