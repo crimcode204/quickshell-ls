@@ -45,7 +45,9 @@ impl LanguageServer for QuickshellLanguageServer {
         if let Some(url) = root_url
             && let Ok(path) = url.to_file_path()
         {
-            let _ = self.root_path.set(path);
+            self.root_path
+                .set(path)
+                .expect("initialize should only be set once");
         }
 
         Ok(InitializeResult {
@@ -121,7 +123,7 @@ impl LanguageServer for QuickshellLanguageServer {
                     for line in ini_content.lines() {
                         let Some(import_paths) = line
                             .strip_prefix("importPaths=")
-                            .and_then(|paths| Some(paths.trim_matches('"')))
+                            .map(|paths| paths.trim_matches('"'))
                         else {
                             continue;
                         };

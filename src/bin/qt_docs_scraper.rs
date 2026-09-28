@@ -2,8 +2,7 @@ use std::{collections::HashMap, fs, path::PathBuf};
 
 use scraper::{Html, Selector};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut docs: HashMap<String, String> = HashMap::new();
 
     // this should maybe not be hardcoded

@@ -54,22 +54,23 @@ impl DocState {
             },
             None => "".to_string(),
         };
+        let docs_md = match QT_DOCS.get(component.name()) {
+            Some(docs) => docs,
+            None => "",
+        };
 
         let markdown = format!(
             "```qml\n{}{}{}\n```\n{}",
-            module_md,
-            component_md,
-            proto_md,
-            QT_DOCS.get(component.name()).unwrap_or(&"".to_string()),
+            module_md, component_md, proto_md, docs_md,
         );
 
-        return Hover {
+        Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
                 value: markdown,
             }),
             range: None,
-        };
+        }
     }
 
     fn property_hover_info(
