@@ -77,6 +77,10 @@ impl WorkspaceState {
         self.components.get(name)
     }
 
+    pub fn remove_component(&self, name: &str) {
+        self.components.remove(name);
+    }
+
     /// Resolves a prototype name
     /// Prototype names have 2 forms: C++ (builtin types) or QML (local files)
     pub fn resolve_prototype(

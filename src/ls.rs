@@ -67,6 +67,42 @@ impl LanguageServer for QuickshellLanguageServer {
                         ..Default::default()
                     },
                 )),
+                workspace: Some(WorkspaceServerCapabilities {
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        did_create: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some(String::from("file")),
+                                pattern: FileOperationPattern {
+                                    glob: String::from("**/*.qml"),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: None,
+                                },
+                            }],
+                        }),
+                        did_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some(String::from("file")),
+                                pattern: FileOperationPattern {
+                                    glob: String::from("**/*.qml"),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: None,
+                                },
+                            }],
+                        }),
+                        did_delete: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some(String::from("file")),
+                                pattern: FileOperationPattern {
+                                    glob: String::from("**/*.qml"),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: None,
+                                },
+                            }],
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
         })
@@ -159,6 +195,65 @@ impl LanguageServer for QuickshellLanguageServer {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.documents.remove(&uri);
+    }
+
+    async fn did_create_files(&self, params: CreateFilesParams) {
+        for file in params.files {
+            if let Ok(uri) = Url::parse(&file.uri)
+                && let Ok(path) = uri.to_file_path()
+                && path.extension().and_then(|ext| ext.to_str()) == Some("qml")
+                // First char is upper case
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |stem| {
+                        stem.chars().next().map_or(false, |c| c.is_uppercase())
+                    })
+                && let Some(root_path) = self.root_path.get()
+                && let Ok(content) = tokio::fs::read_to_string(&path).await
+            {
+                self.workspace.parse_qml_file(&content, &path, root_path);
+            }
+        }
+    }
+
+    async fn did_rename_files(&self, params: RenameFilesParams) {
+        for file in params.files {
+            if let Ok(old_uri) = Url::parse(&file.old_uri)
+                && let Ok(path) = old_uri.to_file_path()
+                && let Some(file_stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                self.workspace.remove_component(file_stem);
+            }
+
+            if let Ok(new_uri) = Url::parse(&file.new_uri)
+                && let Ok(new_path) = new_uri.to_file_path()
+                && new_path.extension().and_then(|ext| ext.to_str()) == Some("qml")
+                // First char is upper case
+                && new_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map_or(false, |stem| {
+                        stem.chars().next().map_or(false, |c| c.is_uppercase())
+                    })
+                && let Some(root_path) = self.root_path.get()
+                && let Ok(content) = tokio::fs::read_to_string(&new_path).await
+            {
+                self.workspace
+                    .parse_qml_file(&content, &new_path, root_path);
+            }
+        }
+    }
+
+    async fn did_delete_files(&self, params: DeleteFilesParams) {
+        params.files.into_iter().for_each(|file| {
+            if let Ok(uri) = Url::parse(&file.uri)
+                && let Ok(path) = uri.to_file_path()
+                && let Some(file_stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                self.workspace.remove_component(file_stem);
+            }
+        });
     }
 
     async fn document_symbol(
