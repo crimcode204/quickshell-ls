@@ -12,7 +12,7 @@ use crate::{doc_state::DocState, workspace::WorkspaceState};
 pub struct QuickshellLanguageServer {
     client: Client,
     parser: Mutex<tree_sitter::Parser>,
-    documents_map: DashMap<String, DocState>,
+    documents: DashMap<String, DocState>,
     workspace: Arc<WorkspaceState>,
     root_path: OnceLock<PathBuf>,
 }
@@ -27,7 +27,7 @@ impl QuickshellLanguageServer {
         Self {
             client,
             parser: Mutex::new(parser),
-            documents_map: DashMap::new(),
+            documents: DashMap::new(),
             workspace: Arc::new(WorkspaceState::new()),
             root_path: OnceLock::new(),
         }
@@ -132,30 +132,33 @@ impl LanguageServer for QuickshellLanguageServer {
         let mut parser = self.parser.lock().await;
         let doc_state = DocState::new(text, &mut parser);
 
-        self.documents_map.insert(uri, doc_state);
+        self.documents.insert(uri, doc_state);
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
 
-        if let Some(mut doc_state) = self.documents_map.get_mut(&uri) {
+        if let Some(mut doc_state) = self.documents.get_mut(&uri) {
             let mut parser = self.parser.lock().await;
             doc_state.update(params.content_changes, &mut parser);
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        self.client
-            .log_message(
-                MessageType::LOG,
-                format!("file '{}' saved!", params.text_document.uri),
-            )
-            .await;
+        let uri = params.text_document.uri;
+
+        if let Some(doc_state) = self.documents.get(&uri.to_string())
+            && let Ok(file_path) = uri.to_file_path()
+            && let Some(root_path) = self.root_path.get()
+        {
+            self.workspace
+                .parse_qml_file(&doc_state.text.to_string(), &file_path, root_path);
+        }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        self.documents_map.remove(&uri);
+        self.documents.remove(&uri);
     }
 
     async fn document_symbol(
@@ -164,7 +167,7 @@ impl LanguageServer for QuickshellLanguageServer {
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri.to_string();
 
-        if let Some(doc_state) = self.documents_map.get(&uri) {
+        if let Some(doc_state) = self.documents.get(&uri) {
             let lsp_symbols = doc_state.symbols.iter().map(DocumentSymbol::from).collect();
 
             Ok(Some(DocumentSymbolResponse::Nested(lsp_symbols)))
@@ -181,7 +184,7 @@ impl LanguageServer for QuickshellLanguageServer {
             .to_string();
         let position = params.text_document_position_params.position;
 
-        if let Some(doc_state) = self.documents_map.get(&uri) {
+        if let Some(doc_state) = self.documents.get(&uri) {
             return Ok(doc_state.hover_info(position, &self.workspace));
         }
 

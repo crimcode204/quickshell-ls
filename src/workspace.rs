@@ -119,20 +119,7 @@ impl WorkspaceState {
                         && file_stem.chars().next().map_or(false, |c| c.is_uppercase())
                         && let Ok(content) = tokio::fs::read_to_string(&path).await
                     {
-                        let module_name = path
-                            .parent()
-                            .and_then(|p| p.strip_prefix(&root_path).ok())
-                            .and_then(|p| p.to_str())
-                            .map(|p| {
-                                if p.is_empty() {
-                                    "qs".to_string()
-                                } else {
-                                    format!("qs.{}", p).replace("/", ".")
-                                }
-                            })
-                            .unwrap_or_else(|| "Local Project".to_string());
-
-                        self.parse_qml_file(&content, file_stem, &module_name);
+                        self.parse_qml_file(&content, &path, root_path.as_ref());
                     }
                 }
             }
@@ -182,7 +169,25 @@ impl WorkspaceState {
             });
     }
 
-    pub fn parse_qml_file(&self, source: &str, file_name: &str, module_name: &str) {
+    pub fn parse_qml_file(&self, source: &str, file_path: &Path, root_path: &Path) {
+        let file_name = file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+
+        let module_name = file_path
+            .parent()
+            .and_then(|p| p.strip_prefix(&root_path).ok())
+            .and_then(|p| p.to_str())
+            .map(|p| {
+                if p.is_empty() {
+                    "qs".to_string()
+                } else {
+                    format!("qs.{}", p).replace("/", ".")
+                }
+            })
+            .unwrap_or_else(|| "Local Project".to_string());
+
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_qmljs::LANGUAGE.into())
@@ -245,7 +250,7 @@ impl WorkspaceState {
             cpp_name: file_name.to_string(),
             qml_name: Some(file_name.to_string()),
             prototype,
-            module: Some(module_name.to_string()),
+            module: Some(module_name),
             properties,
             signals: vec![],
             methods: vec![],
