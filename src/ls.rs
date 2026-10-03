@@ -7,10 +7,10 @@ use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
-use crate::{doc_state::DocState, workspace::WorkspaceState};
+use crate::{doc_state::DocState, handlers, workspace::WorkspaceState};
 
 pub struct QuickshellLanguageServer {
-    client: Client,
+    _client: Client,
     parser: Mutex<tree_sitter::Parser>,
     documents: DashMap<Url, DocState>,
     workspace: Arc<WorkspaceState>,
@@ -18,14 +18,14 @@ pub struct QuickshellLanguageServer {
 }
 
 impl QuickshellLanguageServer {
-    pub fn new(client: Client) -> Self {
+    pub fn new(_client: Client) -> Self {
         let mut parser = tree_sitter::Parser::new();
         let language = tree_sitter_qmljs::LANGUAGE;
         parser
             .set_language(&language.into())
             .expect("Error loading QML parser");
         Self {
-            client,
+            _client,
             parser: Mutex::new(parser),
             documents: DashMap::new(),
             workspace: Arc::new(WorkspaceState::new()),
@@ -59,6 +59,7 @@ impl LanguageServer for QuickshellLanguageServer {
             capabilities: ServerCapabilities {
                 document_symbol_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                position_encoding: Some(PositionEncodingKind::UTF8),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
                         open_close: Some(true),
@@ -166,9 +167,15 @@ impl LanguageServer for QuickshellLanguageServer {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        let text = params.text_document.text;
         let mut parser = self.parser.lock().await;
-        let doc_state = DocState::new(text, &mut parser);
+        let text = params.text_document.text;
+        let file_stem = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().to_string()))
+            .unwrap_or_default();
+
+        let doc_state = DocState::new(file_stem, text, &mut parser);
 
         self.documents.insert(uri, doc_state);
     }
@@ -278,7 +285,7 @@ impl LanguageServer for QuickshellLanguageServer {
         let position = params.text_document_position_params.position;
 
         if let Some(doc_state) = self.documents.get(&uri) {
-            return Ok(doc_state.hover_info(position, &self.workspace));
+            return Ok(handlers::hover(position, &doc_state, &self.workspace));
         }
 
         Ok(None)

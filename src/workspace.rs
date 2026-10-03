@@ -4,6 +4,11 @@ use dashmap::DashMap;
 use tokio::fs;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
+use crate::{
+    qml::{QMLComponent, QMLProperty},
+    ts_kinds,
+};
+
 static QMLTYPES_QUERY: LazyLock<Query> = LazyLock::new(|| {
     let language = tree_sitter_qmljs::LANGUAGE.into();
     let query_string = r#"
@@ -13,46 +18,6 @@ static QMLTYPES_QUERY: LazyLock<Query> = LazyLock::new(|| {
 
     Query::new(&language, query_string).expect("Failed to compile qml types query")
 });
-
-pub struct QMLProperty {
-    pub(crate) name: String,
-    pub(crate) type_name: String,
-    description: Option<String>,
-}
-
-pub struct QMLSignal {
-    name: String,
-    parameters: Vec<QMLParameter>,
-}
-pub struct QMLMethod {
-    name: String,
-    parameters: Vec<QMLParameter>,
-}
-pub struct QMLParameter {
-    name: String,
-    // temporary string, this has to be a primitive type (int, bool, etc.) or a component
-    p_type: String,
-}
-
-pub struct QMLComponent {
-    pub cpp_name: String,
-    pub qml_name: Option<String>,
-    pub(crate) prototype: Option<String>,
-    pub(crate) module: Option<String>,
-
-    pub(crate) properties: Vec<QMLProperty>,
-    signals: Vec<QMLSignal>,
-    methods: Vec<QMLMethod>,
-}
-
-impl QMLComponent {
-    pub fn name(&self) -> &str {
-        match &self.qml_name {
-            Some(name) => name,
-            None => &self.cpp_name,
-        }
-    }
-}
 
 pub struct WorkspaceState {
     components: DashMap<String, QMLComponent>,
@@ -203,63 +168,75 @@ impl WorkspaceState {
         let root_node = tree.root_node();
         let mut cursor = root_node.walk();
 
-        let Some(root_object) = root_node
+        // Main component
+        if let Some(root_object) = root_node
             .children(&mut cursor)
             .find(|n| n.kind() == ts_kinds::UI_OBJECT_DEFINITION)
-        else {
-            return;
-        };
-
-        let prototype = root_object
-            .child_by_field_name("type_name")
-            .and_then(|n| n.utf8_text(text_bytes).ok())
-            .map(String::from);
-
-        let mut properties = Vec::new();
-
-        if let Some(initializer) = root_object
-            .children(&mut root_object.walk())
-            .find(|n| n.kind() == ts_kinds::UI_OBJECT_INITIALIZER)
         {
-            let mut init_cursor = initializer.walk();
-            initializer.children(&mut init_cursor).for_each(|child| {
-                if child.kind() != ts_kinds::UI_PROPERTY_DECLARATION {
-                    return;
-                }
+            let prototype = root_object
+                .child_by_field_name("type_name")
+                .and_then(|n| n.utf8_text(text_bytes).ok())
+                .map(String::from);
 
-                let Some(name) = child
-                    .child_by_field_name("name")
-                    .and_then(|n| n.utf8_text(text_bytes).ok())
-                    .map(String::from)
-                else {
-                    return;
-                };
+            let properties = root_object
+                .children(&mut root_object.walk())
+                .find(|node| node.kind() == ts_kinds::UI_OBJECT_INITIALIZER)
+                .map(|init| Self::extract_properties(init, text_bytes))
+                .unwrap_or_default();
 
-                let type_name = child
-                    .child_by_field_name("type")
-                    .or_else(|| child.child_by_field_name("type_name"))
-                    .and_then(|n| n.utf8_text(text_bytes).ok())
-                    .unwrap_or("var")
-                    .to_string();
-
-                properties.push(QMLProperty {
-                    name,
-                    type_name,
-                    description: None,
-                });
-            });
+            let component = QMLComponent {
+                cpp_name: file_name.to_string(),
+                qml_name: Some(file_name.to_string()),
+                prototype,
+                module: Some(module_name.clone()),
+                properties,
+                signals: vec![],
+                methods: vec![],
+            };
+            self.components.insert(file_name.to_string(), component);
         }
 
-        let component = QMLComponent {
-            cpp_name: file_name.to_string(),
-            qml_name: Some(file_name.to_string()),
-            prototype,
-            module: Some(module_name),
-            properties,
-            signals: vec![],
-            methods: vec![],
-        };
-        self.components.insert(file_name.to_string(), component);
+        let mut nodes_to_visit = vec![root_node];
+        let mut cursor = tree.walk();
+
+        // Inline components
+        while let Some(node) = nodes_to_visit.pop() {
+            if node.kind() == ts_kinds::UI_INLINE_COMPONENT {
+                let name = node
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(text_bytes).ok())
+                    .unwrap_or_default();
+
+                let prototype = node
+                    .child_by_field_name("prototype")
+                    .and_then(|n| n.utf8_text(text_bytes).ok())
+                    .map(String::from);
+
+                let properties = node
+                    .children(&mut node.walk())
+                    .find(|node| node.kind() == ts_kinds::UI_OBJECT_INITIALIZER)
+                    .map(|init| Self::extract_properties(init, text_bytes))
+                    .unwrap_or_default();
+
+                let composite_name = format!("{}.{}", file_name, name);
+
+                let component = QMLComponent {
+                    cpp_name: composite_name.clone(),
+                    qml_name: Some(composite_name.to_string()),
+                    prototype,
+                    module: Some(module_name.clone()),
+                    properties,
+                    signals: vec![],
+                    methods: vec![],
+                };
+
+                self.components.insert(composite_name, component);
+            }
+
+            for child in node.children(&mut cursor) {
+                nodes_to_visit.push(child);
+            }
+        }
     }
 
     fn extract_component(node: Node, source: &[u8]) -> Option<QMLComponent> {
@@ -317,6 +294,40 @@ impl WorkspaceState {
         })
     }
 
+    fn extract_properties(node: Node, source: &[u8]) -> Vec<QMLProperty> {
+        let mut properties = Vec::new();
+        let mut cursor = node.walk();
+
+        node.children(&mut cursor).for_each(|child| {
+            if child.kind() != ts_kinds::UI_PROPERTY_DECLARATION {
+                return;
+            }
+
+            let Some(name) = child
+                .child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .map(String::from)
+            else {
+                return;
+            };
+
+            let type_name = child
+                .child_by_field_name("type")
+                .or_else(|| child.child_by_field_name("type_name"))
+                .and_then(|n| n.utf8_text(source).ok())
+                .unwrap_or("var")
+                .to_string();
+
+            properties.push(QMLProperty {
+                name,
+                type_name,
+                description: None,
+            });
+        });
+
+        properties
+    }
+
     fn find_binding_value(node: Node, key: &str, source: &[u8]) -> Option<String> {
         let mut cursor = node.walk();
         node.children(&mut cursor).find_map(|child| {
@@ -367,12 +378,4 @@ impl WorkspaceState {
             _ => (None, None),
         }
     }
-}
-
-pub(crate) mod ts_kinds {
-    pub const UI_PROPERTY_DECLARATION: &str = "ui_property_declaration";
-    pub const UI_OBJECT_INITIALIZER: &str = "ui_object_initializer";
-    pub const UI_OBJECT_DEFINITION: &str = "ui_object_definition";
-    pub const UI_BINDING: &str = "ui_binding";
-    pub const IDENTIFIER: &str = "identifier";
 }

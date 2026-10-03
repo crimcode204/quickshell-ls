@@ -4,10 +4,10 @@ use tower_lsp::lsp_types::TextDocumentContentChangeEvent;
 use crate::doc_state::doc_symbol::DocSymbol;
 
 mod doc_symbol;
-mod hover;
 mod symbols;
 
 pub struct DocState {
+    pub(crate) name: String,
     pub(crate) text: Rope,
     pub(crate) tree: tree_sitter::Tree,
     pub symbols: Vec<DocSymbol>,
@@ -15,12 +15,13 @@ pub struct DocState {
 
 impl DocState {
     /// Returns a new document state, with populated [`tree_sitter::Tree`] and symbols tree.
-    pub fn new(text: String, parser: &mut tree_sitter::Parser) -> Self {
+    pub fn new(name: String, text: String, parser: &mut tree_sitter::Parser) -> Self {
         let tree = parser.parse(&text, None).unwrap();
         let rope = Rope::from(text);
         let symbols = DocState::build_symbols_tree(&rope, &tree);
 
         Self {
+            name,
             text: rope,
             tree,
             symbols,

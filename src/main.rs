@@ -3,7 +3,10 @@ use tower_lsp::{LspService, Server};
 use crate::ls::QuickshellLanguageServer;
 
 mod doc_state;
+mod handlers;
 mod ls;
+mod qml;
+mod ts_kinds;
 mod workspace;
 
 #[tokio::main]
