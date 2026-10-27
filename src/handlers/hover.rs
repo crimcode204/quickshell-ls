@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::LazyLock};
 
+use serde::Deserialize;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::{
@@ -11,7 +12,13 @@ use crate::{
     registry::ComponentRegistry,
 };
 
-static QT_DOCS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+#[derive(Deserialize)]
+struct QtComponentDocs {
+    description: String,
+    properties: HashMap<String, String>,
+}
+
+static QT_DOCS: LazyLock<HashMap<String, QtComponentDocs>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("../../data/qt_docs.json")).unwrap_or_default()
 });
 
@@ -30,12 +37,7 @@ pub fn hover(
                 property,
                 owner_type_name,
             } => {
-                return Some(
-                    HoverBuilder::new()
-                        .signature(format!("property {}: {}", property.name, property.p_type))
-                        .prop_owner(owner_type_name)
-                        .build(),
-                );
+                return Some(property_hover_info(&property, owner_type_name));
             }
             ResolvedProperty::Global(component) => {
                 let mut current_proto = Some(component.cpp_name.clone());
@@ -46,9 +48,7 @@ pub fn hover(
                         break;
                     };
                     if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == name) {
-                        return Some(global_property_hover_info(
-                            &prop, &component, doc_state, workspace,
-                        ));
+                        return Some(property_hover_info(&prop, component.name()));
                     }
                     current_proto = parent_comp.prototype.clone();
                 }
@@ -86,27 +86,20 @@ fn component_hover_info(component: &QMLComponent) -> Hover {
     let mut builder = HoverBuilder::new().signature(signature);
 
     if let Some(docs) = QT_DOCS.get(component.name()) {
-        builder = builder.docs(docs);
+        builder = builder.docs(&docs.description);
     }
 
     builder.build()
 }
 
-fn global_property_hover_info(
-    property: &QMLProperty,
-    parent_comp: &QMLComponent,
-    doc_state: &DocState,
-    workspace: &ComponentRegistry,
-) -> Hover {
+fn property_hover_info(property: &QMLProperty, parent_comp_name: &str) -> Hover {
     let mut builder = HoverBuilder::new()
         .signature(format!("property {}: {}", property.name, property.p_type))
-        .prop_owner(parent_comp.name());
+        .prop_owner(parent_comp_name);
 
-    if let QMLPropertyType::Custom(comp_name) = &property.p_type {
-        if let Some(type_component) = resolve_component(comp_name, doc_state, workspace) {
-            if let Some(docs) = QT_DOCS.get(type_component.name()) {
-                builder = builder.docs(format!("**{}**\n{}", type_component.name(), docs));
-            }
+    if let Some(parent_docs) = QT_DOCS.get(parent_comp_name) {
+        if let Some(prop_desc) = parent_docs.properties.get(&property.name) {
+            builder = builder.docs(prop_desc)
         }
     }
 

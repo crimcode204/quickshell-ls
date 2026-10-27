@@ -1,9 +1,16 @@
 use std::{collections::HashMap, fs, path::PathBuf};
 
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct QtComponentDocs {
+    description: String,
+    properties: HashMap<String, String>,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut docs: HashMap<String, String> = HashMap::new();
+    let mut docs: HashMap<String, QtComponentDocs> = HashMap::new();
 
     // this should maybe not be hardcoded
     // but qmake returns a bad path (/usr/share/doc/qt) so idk
@@ -16,6 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let title_selector = Selector::parse("h1.title").unwrap();
     let descr_selector = Selector::parse("h1.title ~ p").unwrap();
+    let prop_header_selector = Selector::parse("h3.qml-property").unwrap();
+    let prop_name_selector = Selector::parse("span.name").unwrap();
 
     let mut files_to_visit = vec![docs_root];
 
@@ -55,7 +64,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if let (Some(name), Some(desc)) = (component_name, description) {
                     if !name.is_empty() && !desc.is_empty() {
-                        docs.insert(name, desc);
+                        let mut properties = HashMap::new();
+
+                        for prop_header in document.select(&prop_header_selector) {
+                            let prop_name = prop_header
+                                .select(&prop_name_selector)
+                                .next()
+                                .map(|n| n.text().collect::<String>().trim().to_string());
+
+                            if let Some(prop_name) = prop_name {
+                                let mut next_node = prop_header.next_sibling();
+                                let mut prop_desc = String::new();
+
+                                while let Some(node) = next_node {
+                                    if let Some(element) = ElementRef::wrap(node) {
+                                        if element.value().name() == "p" {
+                                            prop_desc = element
+                                                .text()
+                                                .collect::<Vec<_>>()
+                                                .join("")
+                                                .trim()
+                                                .to_string();
+                                        }
+                                        break;
+                                    }
+                                    next_node = node.next_sibling();
+                                }
+
+                                if !prop_desc.is_empty() {
+                                    properties.insert(prop_name, prop_desc);
+                                }
+                            }
+                        }
+
+                        docs.insert(
+                            name,
+                            QtComponentDocs {
+                                description: desc,
+                                properties,
+                            },
+                        );
                     }
                 }
             }
