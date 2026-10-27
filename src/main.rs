@@ -1,13 +1,13 @@
 use tower_lsp::{LspService, Server};
 
-use crate::ls::QuickshellLanguageServer;
+use crate::server::QuickshellLanguageServer;
 
 mod doc_state;
 mod handlers;
-mod ls;
 mod qml;
+mod registry;
+mod server;
 mod ts_kinds;
-mod workspace;
 
 #[tokio::main]
 async fn main() {

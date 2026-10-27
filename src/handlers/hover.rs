@@ -2,7 +2,14 @@ use std::{collections::HashMap, sync::LazyLock};
 
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
-use crate::{doc_state::DocState, qml::QMLComponent, ts_kinds, workspace::WorkspaceState};
+use crate::{
+    doc_state::DocState,
+    handlers::resolver::{
+        ResolvedProperty, resolve_component, resolve_property_in_scope, resolve_prototype,
+    },
+    qml::{QMLComponent, QMLProperty, QMLPropertyType},
+    registry::ComponentRegistry,
+};
 
 static QT_DOCS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("../../data/qt_docs.json")).unwrap_or_default()
@@ -11,123 +18,147 @@ static QT_DOCS: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
 pub fn hover(
     position: tower_lsp::lsp_types::Position,
     doc_state: &DocState,
-    workspace: &WorkspaceState,
+    workspace: &ComponentRegistry,
 ) -> Option<Hover> {
     let node = doc_state.node_at(position)?;
     let name = doc_state.node_text(&node);
+    let byte_offset = node.start_byte();
 
-    if node.parent()?.kind() == ts_kinds::UI_BINDING {
-        let mut current_block = node.parent()?;
-        while current_block.kind() != ts_kinds::UI_OBJECT_DEFINITION {
-            current_block = current_block.parent()?;
-        }
+    if let Some(resolved) = resolve_property_in_scope(byte_offset, &name, doc_state, workspace) {
+        match resolved {
+            ResolvedProperty::Local {
+                property,
+                owner_type_name,
+            } => {
+                return Some(
+                    HoverBuilder::new()
+                        .signature(format!("property {}: {}", property.name, property.p_type))
+                        .prop_owner(owner_type_name)
+                        .build(),
+                );
+            }
+            ResolvedProperty::Global(component) => {
+                let mut current_proto = Some(component.cpp_name.clone());
 
-        let type_node = current_block.child_by_field_name("type_name")?;
-        let parent_component_name = doc_state.node_text(&type_node);
-
-        if let Some(component) = resolve_component(&parent_component_name, doc_state, workspace) {
-            return property_hover_info(&name, &component, doc_state, workspace);
+                while let Some(proto_name) = current_proto {
+                    let Some(parent_comp) = resolve_prototype(&proto_name, doc_state, workspace)
+                    else {
+                        break;
+                    };
+                    if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == name) {
+                        return Some(global_property_hover_info(
+                            &prop, &component, doc_state, workspace,
+                        ));
+                    }
+                    current_proto = parent_comp.prototype.clone();
+                }
+                return None;
+            }
         }
     }
 
     if let Some(component) = resolve_component(&name, doc_state, workspace) {
-        return Some(component_hover_info(&component, doc_state, workspace));
+        return Some(component_hover_info(&component));
     }
 
     None
 }
 
-fn component_hover_info(
-    component: &QMLComponent,
-    doc_state: &DocState,
-    workspace: &WorkspaceState,
-) -> Hover {
-    let module_md = match &component.module {
-        Some(module) => format!("import {}\n", module),
-        None => "".to_string(),
-    };
-    let component_md = format!("component {}", component.name());
-    let proto_md = match &component.prototype {
-        Some(proto_name) => match resolve_prototype(proto_name, doc_state, workspace) {
-            Some(p) => format!(" : {}", p.name()),
-            None => "".to_string(),
-        },
-        None => "".to_string(),
-    };
-    let docs_md = match QT_DOCS.get(component.name()) {
-        Some(docs) => docs,
-        None => "",
-    };
+fn component_hover_info(component: &QMLComponent) -> Hover {
+    let module_str = component.module.as_deref().unwrap_or("");
+    let proto_str = component.prototype.as_deref().unwrap_or("");
 
-    let markdown = format!(
-        "```qml\n{}{}{}\n```\n{}",
-        module_md, component_md, proto_md, docs_md,
+    let signature = format!(
+        "{}component {}{}",
+        if module_str.is_empty() {
+            "".to_string()
+        } else {
+            format!("import {}\n\n", module_str)
+        },
+        component.name(),
+        if proto_str.is_empty() {
+            "".to_string()
+        } else {
+            format!(" : {}", proto_str)
+        }
     );
 
-    Hover {
-        contents: HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: markdown,
-        }),
-        range: None,
+    let mut builder = HoverBuilder::new().signature(signature);
+
+    if let Some(docs) = QT_DOCS.get(component.name()) {
+        builder = builder.docs(docs);
     }
+
+    builder.build()
 }
 
-fn property_hover_info(
-    prop_name: &str,
-    component: &QMLComponent,
+fn global_property_hover_info(
+    property: &QMLProperty,
+    parent_comp: &QMLComponent,
     doc_state: &DocState,
-    workspace: &WorkspaceState,
-) -> Option<Hover> {
-    let mut current_proto = Some(component.cpp_name.clone());
+    workspace: &ComponentRegistry,
+) -> Hover {
+    let mut builder = HoverBuilder::new()
+        .signature(format!("property {}: {}", property.name, property.p_type))
+        .prop_owner(parent_comp.name());
 
-    while let Some(proto_name) = current_proto {
-        let Some(parent_comp) = resolve_prototype(&proto_name, doc_state, workspace) else {
-            break;
-        };
-        if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == prop_name) {
-            let markdown = format!(
-                "```qml\n(property) {}: {}\n```\n*Defined in `{}`*",
-                prop.name,
-                prop.type_name,
-                parent_comp.name(),
-            );
-
-            return Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: markdown,
-                }),
-                range: None,
-            });
+    if let QMLPropertyType::Custom(comp_name) = &property.p_type {
+        if let Some(type_component) = resolve_component(comp_name, doc_state, workspace) {
+            if let Some(docs) = QT_DOCS.get(type_component.name()) {
+                builder = builder.docs(format!("**{}**\n{}", type_component.name(), docs));
+            }
         }
-        current_proto = parent_comp.prototype.clone();
     }
-    None
+
+    builder.build()
 }
 
-fn resolve_component<'a>(
-    name: &str,
-    doc_state: &DocState,
-    workspace: &'a WorkspaceState,
-) -> Option<dashmap::mapref::one::Ref<'a, String, QMLComponent>> {
-    let local_name = format!("{}.{}", doc_state.name, name);
-
-    match workspace.component(&local_name) {
-        Some(comp) => Some(comp),
-        None => workspace.component(name),
-    }
+#[derive(Default)]
+struct HoverBuilder {
+    signature: String,
+    prop_owner: Option<String>,
+    docs: Option<String>,
 }
 
-pub fn resolve_prototype<'a>(
-    proto_name: &str,
-    doc_state: &DocState,
-    workspace: &'a WorkspaceState,
-) -> Option<dashmap::mapref::one::Ref<'a, String, QMLComponent>> {
-    let local_name = format!("{}.{}", doc_state.name, proto_name);
+impl HoverBuilder {
+    fn new() -> Self {
+        Self::default()
+    }
 
-    match workspace.component(&local_name) {
-        Some(comp) => Some(comp),
-        None => workspace.resolve_prototype(proto_name),
+    fn signature(mut self, sig: impl Into<String>) -> Self {
+        self.signature = sig.into();
+        self
+    }
+
+    fn prop_owner(mut self, owner: impl Into<String>) -> Self {
+        self.prop_owner = Some(owner.into());
+        self
+    }
+
+    fn docs(mut self, docs: impl Into<String>) -> Self {
+        self.docs = Some(docs.into());
+        self
+    }
+
+    fn build(self) -> Hover {
+        let mut markdown = String::with_capacity(32);
+
+        if let Some(owner) = self.prop_owner {
+            markdown.push_str(&format!("**{}**\n\n", owner));
+        }
+
+        markdown.push_str(&format!("```qml\n{}\n```", self.signature));
+
+        if let Some(docs) = self.docs {
+            markdown.push_str(&format!("\n\n{}", docs));
+        }
+
+        Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value: markdown,
+            }),
+            range: None,
+        }
     }
 }

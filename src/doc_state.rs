@@ -1,30 +1,29 @@
 use crop::Rope;
 use tower_lsp::lsp_types::TextDocumentContentChangeEvent;
 
-use crate::doc_state::doc_symbol::DocSymbol;
+pub use crate::doc_state::local_instance::LocalInstance;
 
-mod doc_symbol;
-mod symbols;
+mod local_instance;
 
 pub struct DocState {
     pub(crate) name: String,
     pub(crate) text: Rope,
     pub(crate) tree: tree_sitter::Tree,
-    pub symbols: Vec<DocSymbol>,
+    pub instances: Vec<LocalInstance>,
 }
 
 impl DocState {
     /// Returns a new document state, with populated [`tree_sitter::Tree`] and symbols tree.
     pub fn new(name: String, text: String, parser: &mut tree_sitter::Parser) -> Self {
         let tree = parser.parse(&text, None).unwrap();
+        let instances = LocalInstance::build_tree(tree.root_node(), text.as_bytes());
         let rope = Rope::from(text);
-        let symbols = DocState::build_symbols_tree(&rope, &tree);
 
         Self {
             name,
             text: rope,
             tree,
-            symbols,
+            instances,
         }
     }
 
@@ -90,7 +89,8 @@ impl DocState {
                 .unwrap();
         }
 
-        self.symbols = DocState::build_symbols_tree(&self.text, &self.tree)
+        self.instances =
+            LocalInstance::build_tree(self.tree.root_node(), self.text.to_string().as_bytes());
     }
 
     /// Returns an AST node corresponding to a specified LSP position.

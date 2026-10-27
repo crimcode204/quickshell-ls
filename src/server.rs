@@ -7,13 +7,13 @@ use dashmap::DashMap;
 use tokio::sync::Mutex;
 use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
-use crate::{doc_state::DocState, handlers, workspace::WorkspaceState};
+use crate::{doc_state::DocState, handlers, registry::ComponentRegistry};
 
 pub struct QuickshellLanguageServer {
     _client: Client,
     parser: Mutex<tree_sitter::Parser>,
     documents: DashMap<Url, DocState>,
-    workspace: Arc<WorkspaceState>,
+    workspace: Arc<ComponentRegistry>,
     root_path: OnceLock<PathBuf>,
 }
 
@@ -28,7 +28,7 @@ impl QuickshellLanguageServer {
             _client,
             parser: Mutex::new(parser),
             documents: DashMap::new(),
-            workspace: Arc::new(WorkspaceState::new()),
+            workspace: Arc::new(ComponentRegistry::new()),
             root_path: OnceLock::new(),
         }
     }
@@ -265,20 +265,20 @@ impl LanguageServer for QuickshellLanguageServer {
         });
     }
 
-    async fn document_symbol(
-        &self,
-        params: DocumentSymbolParams,
-    ) -> Result<Option<DocumentSymbolResponse>> {
-        let uri = params.text_document.uri;
-
-        if let Some(doc_state) = self.documents.get(&uri) {
-            let lsp_symbols = doc_state.symbols.iter().map(DocumentSymbol::from).collect();
-
-            Ok(Some(DocumentSymbolResponse::Nested(lsp_symbols)))
-        } else {
-            Ok(None)
-        }
-    }
+    //     async fn document_symbol(
+    //         &self,
+    //         params: DocumentSymbolParams,
+    //     ) -> Result<Option<DocumentSymbolResponse>> {
+    //         let uri = params.text_document.uri;
+    //
+    //         if let Some(doc_state) = self.documents.get(&uri) {
+    //             let lsp_symbols = doc_state.symbols.iter().map(DocumentSymbol::from).collect();
+    //
+    //             Ok(Some(DocumentSymbolResponse::Nested(lsp_symbols)))
+    //         } else {
+    //             Ok(None)
+    //         }
+    //     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;

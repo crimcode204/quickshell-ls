@@ -19,12 +19,12 @@ static QMLTYPES_QUERY: LazyLock<Query> = LazyLock::new(|| {
     Query::new(&language, query_string).expect("Failed to compile qml types query")
 });
 
-pub struct WorkspaceState {
+pub struct ComponentRegistry {
     components: DashMap<String, QMLComponent>,
     cpp_to_qml: DashMap<String, String>,
 }
 
-impl WorkspaceState {
+impl ComponentRegistry {
     /// Returns a new workspace state
     pub fn new() -> Self {
         Self {
@@ -289,7 +289,7 @@ impl WorkspaceState {
 
         Some(QMLProperty {
             name,
-            type_name,
+            p_type: type_name.into(),
             description: None,
         })
     }
@@ -320,7 +320,7 @@ impl WorkspaceState {
 
             properties.push(QMLProperty {
                 name,
-                type_name,
+                p_type: type_name.into(),
                 description: None,
             });
         });
