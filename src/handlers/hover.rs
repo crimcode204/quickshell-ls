@@ -8,7 +8,7 @@ use crate::{
     handlers::resolver::{
         ResolvedProperty, resolve_component, resolve_property_in_scope, resolve_prototype,
     },
-    qml::{QMLComponent, QMLProperty, QMLPropertyType},
+    qml::{QMLComponent, QMLProperty},
     registry::ComponentRegistry,
 };
 

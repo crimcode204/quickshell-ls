@@ -4,11 +4,11 @@ use tree_sitter::Node;
 use crate::{qml::QMLProperty, ts_kinds};
 
 pub struct LocalInstance {
-    pub byte_range: Range<usize>,
-    pub type_name: String,
-    pub id: Option<String>,
-    pub properties: Vec<QMLProperty>,
-    pub children: Vec<LocalInstance>,
+    pub(crate) byte_range: Range<usize>,
+    pub(crate) type_name: String,
+    pub(crate) id: Option<String>,
+    pub(crate) properties: Vec<QMLProperty>,
+    pub(crate) children: Vec<LocalInstance>,
 }
 
 impl LocalInstance {
@@ -99,7 +99,6 @@ impl LocalInstance {
         Some(QMLProperty {
             name,
             p_type: type_name.into(),
-            description: None,
         })
     }
 }

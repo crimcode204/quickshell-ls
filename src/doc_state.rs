@@ -9,7 +9,7 @@ pub struct DocState {
     pub(crate) name: String,
     pub(crate) text: Rope,
     pub(crate) tree: tree_sitter::Tree,
-    pub instances: Vec<LocalInstance>,
+    pub(crate) instances: Vec<LocalInstance>,
 }
 
 impl DocState {
@@ -34,8 +34,6 @@ impl DocState {
         parser: &mut tree_sitter::Parser,
     ) {
         let mut is_parsed = false;
-        // This assumes only UTF-8 chars, but changes can contain UTF-16 characters
-        // todo: rewrite for UTF-16
         changes.into_iter().for_each(|change| {
             let Some(range) = change.range else {
                 self.tree = parser.parse(&change.text, None).unwrap();

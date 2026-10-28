@@ -14,9 +14,8 @@ pub enum QMLPropertyType {
 }
 
 pub struct QMLProperty {
-    pub(crate) name: String,
-    pub(crate) p_type: QMLPropertyType,
-    pub(crate) description: Option<String>,
+    pub name: String,
+    pub p_type: QMLPropertyType,
 }
 
 pub struct QMLSignal {
@@ -35,12 +34,12 @@ pub struct QMLParameter {
 pub struct QMLComponent {
     pub cpp_name: String,
     pub qml_name: Option<String>,
-    pub(crate) prototype: Option<String>,
-    pub(crate) module: Option<String>,
+    pub prototype: Option<String>,
+    pub module: Option<String>,
 
-    pub(crate) properties: Vec<QMLProperty>,
-    pub(crate) signals: Vec<QMLSignal>,
-    pub(crate) methods: Vec<QMLMethod>,
+    pub properties: Vec<QMLProperty>,
+    pub signals: Vec<QMLSignal>,
+    pub methods: Vec<QMLMethod>,
 }
 
 impl FromStr for QMLBasicType {

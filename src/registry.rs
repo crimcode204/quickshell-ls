@@ -290,7 +290,6 @@ impl ComponentRegistry {
         Some(QMLProperty {
             name,
             p_type: type_name.into(),
-            description: None,
         })
     }
 
@@ -321,7 +320,6 @@ impl ComponentRegistry {
             properties.push(QMLProperty {
                 name,
                 p_type: type_name.into(),
-                description: None,
             });
         });
 
