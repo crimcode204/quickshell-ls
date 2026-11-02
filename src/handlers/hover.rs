@@ -6,10 +6,12 @@ use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 use crate::{
     doc_state::DocState,
     handlers::resolver::{
-        ResolvedProperty, resolve_component, resolve_property_in_scope, resolve_prototype,
+        ResolvedProperty, resolve_component, resolve_identifier, resolve_member_access,
+        resolve_prototype,
     },
     qml::{QMLComponent, QMLProperty},
     registry::ComponentRegistry,
+    ts_kinds,
 };
 
 #[derive(Deserialize)]
@@ -31,7 +33,29 @@ pub fn hover(
     let name = doc_state.node_text(&node);
     let byte_offset = node.start_byte();
 
-    if let Some(resolved) = resolve_property_in_scope(byte_offset, &name, doc_state, workspace) {
+    let mut resolved_prop = None;
+    if let Some(parent) = node.parent() {
+        if parent.kind() == ts_kinds::MEMBER_EXPRESSION
+            || parent.kind() == ts_kinds::NESTED_IDENTIFIER
+        {
+            let prop_node = parent
+                .child_by_field_name("property")
+                .or_else(|| parent.child(2));
+
+            let object_node = parent
+                .child_by_field_name("object")
+                .or_else(|| parent.child(0));
+
+            if let (Some(prop), Some(object)) = (prop_node, object_node) {
+                if prop.id() == node.id() {
+                    resolved_prop = resolve_member_access(object, &name, doc_state, workspace);
+                }
+            }
+        }
+    }
+    if let Some(resolved) =
+        resolved_prop.or_else(|| resolve_identifier(byte_offset, &name, doc_state, workspace))
+    {
         match resolved {
             ResolvedProperty::Local {
                 property,
@@ -53,6 +77,16 @@ pub fn hover(
                     current_proto = parent_comp.prototype.clone();
                 }
                 return None;
+            }
+            ResolvedProperty::IdReference(instance) => {
+                let signature = format!("id {}: {}", name, instance.type_name);
+                let mut builder = HoverBuilder::new().signature(signature);
+
+                if let Some(docs) = QT_DOCS.get(&instance.type_name) {
+                    builder = builder.docs(&docs.description);
+                }
+
+                return Some(builder.build());
             }
         }
     }
