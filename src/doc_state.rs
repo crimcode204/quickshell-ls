@@ -16,7 +16,7 @@ impl DocState {
     /// Returns a new document state, with populated [`tree_sitter::Tree`] and symbols tree.
     pub fn new(name: String, text: String, parser: &mut tree_sitter::Parser) -> Self {
         let tree = parser.parse(&text, None).unwrap();
-        let instances = LocalInstance::build_tree(tree.root_node(), text.as_bytes());
+        let instances = LocalInstance::build_tree(tree.root_node(), text.as_bytes(), Some(&name));
         let rope = Rope::from(text);
 
         Self {
@@ -87,8 +87,11 @@ impl DocState {
                 .unwrap();
         }
 
-        self.instances =
-            LocalInstance::build_tree(self.tree.root_node(), self.text.to_string().as_bytes());
+        self.instances = LocalInstance::build_tree(
+            self.tree.root_node(),
+            self.text.to_string().as_bytes(),
+            Some(&self.name),
+        );
     }
 
     /// Returns an AST node corresponding to a specified LSP position.

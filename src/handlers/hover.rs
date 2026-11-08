@@ -5,13 +5,9 @@ use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::{
     doc_state::DocState,
-    handlers::resolver::{
-        ResolvedProperty, resolve_component, resolve_identifier, resolve_member_access,
-        resolve_prototype,
-    },
+    handlers::resolver::{ExpressionMember, resolve_expression, resolve_prototype},
     qml::{QMLComponent, QMLProperty},
     registry::ComponentRegistry,
-    ts_kinds,
 };
 
 #[derive(Deserialize)]
@@ -30,72 +26,43 @@ pub fn hover(
     workspace: &ComponentRegistry,
 ) -> Option<Hover> {
     let node = doc_state.node_at(position)?;
-    let name = doc_state.node_text(&node);
-    let byte_offset = node.start_byte();
 
-    let mut resolved_prop = None;
-    if let Some(parent) = node.parent() {
-        if parent.kind() == ts_kinds::MEMBER_EXPRESSION
-            || parent.kind() == ts_kinds::NESTED_IDENTIFIER
-        {
-            let prop_node = parent
-                .child_by_field_name("property")
-                .or_else(|| parent.child(2));
+    match resolve_expression(node, doc_state, workspace)? {
+        ExpressionMember::LocalProperty {
+            property,
+            owner_type_name,
+        } => {
+            return Some(property_hover_info(&property, owner_type_name));
+        }
+        ExpressionMember::GlobalProperty {
+            component,
+            prop_name,
+        } => {
+            let mut current_proto = Some(component.cpp_name.clone());
 
-            let object_node = parent
-                .child_by_field_name("object")
-                .or_else(|| parent.child(0));
-
-            if let (Some(prop), Some(object)) = (prop_node, object_node) {
-                if prop.id() == node.id() {
-                    resolved_prop = resolve_member_access(object, &name, doc_state, workspace);
+            while let Some(proto_name) = current_proto {
+                let Some(parent_comp) = resolve_prototype(&proto_name, doc_state, workspace) else {
+                    break;
+                };
+                if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == prop_name) {
+                    return Some(property_hover_info(&prop, component.name()));
                 }
+                current_proto = parent_comp.prototype.clone();
             }
+            return None;
+        }
+        ExpressionMember::Component(component) => return Some(component_hover_info(&component)),
+        ExpressionMember::IdReference(instance) => {
+            let signature = format!("id {}: {}", doc_state.node_text(&node), instance.type_name);
+            let mut builder = HoverBuilder::new().signature(signature);
+
+            if let Some(docs) = QT_DOCS.get(&instance.type_name) {
+                builder = builder.docs(&docs.description);
+            }
+
+            return Some(builder.build());
         }
     }
-    if let Some(resolved) =
-        resolved_prop.or_else(|| resolve_identifier(byte_offset, &name, doc_state, workspace))
-    {
-        match resolved {
-            ResolvedProperty::Local {
-                property,
-                owner_type_name,
-            } => {
-                return Some(property_hover_info(&property, owner_type_name));
-            }
-            ResolvedProperty::Global(component) => {
-                let mut current_proto = Some(component.cpp_name.clone());
-
-                while let Some(proto_name) = current_proto {
-                    let Some(parent_comp) = resolve_prototype(&proto_name, doc_state, workspace)
-                    else {
-                        break;
-                    };
-                    if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == name) {
-                        return Some(property_hover_info(&prop, component.name()));
-                    }
-                    current_proto = parent_comp.prototype.clone();
-                }
-                return None;
-            }
-            ResolvedProperty::IdReference(instance) => {
-                let signature = format!("id {}: {}", name, instance.type_name);
-                let mut builder = HoverBuilder::new().signature(signature);
-
-                if let Some(docs) = QT_DOCS.get(&instance.type_name) {
-                    builder = builder.docs(&docs.description);
-                }
-
-                return Some(builder.build());
-            }
-        }
-    }
-
-    if let Some(component) = resolve_component(&name, doc_state, workspace) {
-        return Some(component_hover_info(&component));
-    }
-
-    None
 }
 
 fn component_hover_info(component: &QMLComponent) -> Hover {

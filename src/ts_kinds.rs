@@ -1,9 +1,10 @@
-pub const UI_PROPERTY_DECLARATION: &str = "ui_property_declaration";
-pub const UI_PROPERTY: &str = "ui_property";
-pub const UI_OBJECT_INITIALIZER: &str = "ui_object_initializer";
-pub const UI_OBJECT_DEFINITION: &str = "ui_object_definition";
-pub const UI_INLINE_COMPONENT: &str = "ui_inline_component";
-pub const UI_BINDING: &str = "ui_binding";
 pub const IDENTIFIER: &str = "identifier";
 pub const MEMBER_EXPRESSION: &str = "member_expression";
 pub const NESTED_IDENTIFIER: &str = "nested_identifier";
+pub const PROPERTY_IDENTIFIER: &str = "property_identifier";
+pub const TYPE_IDENTIFIER: &str = "type_identifier";
+pub const UI_BINDING: &str = "ui_binding";
+pub const UI_INLINE_COMPONENT: &str = "ui_inline_component";
+pub const UI_OBJECT_DEFINITION: &str = "ui_object_definition";
+pub const UI_OBJECT_INITIALIZER: &str = "ui_object_initializer";
+pub const UI_PROPERTY: &str = "ui_property";

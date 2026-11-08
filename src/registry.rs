@@ -117,7 +117,7 @@ impl ComponentRegistry {
                     }
 
                     let component_node = capture.node.parent().unwrap();
-                    let Some(mut component) = Self::extract_component(component_node, text_bytes)
+                    let Some(component) = Self::extract_component(component_node, text_bytes)
                     else {
                         return;
                     };
@@ -125,9 +125,15 @@ impl ComponentRegistry {
                     if let Some(mut registered_component) =
                         self.components.get_mut(component.name())
                     {
-                        registered_component
-                            .properties
-                            .append(&mut component.properties);
+                        component.properties.into_iter().for_each(|prop| {
+                            if !registered_component
+                                .properties
+                                .iter()
+                                .any(|p| p.name == prop.name)
+                            {
+                                registered_component.properties.push(prop);
+                            }
+                        });
                     } else {
                         self.cpp_to_qml
                             .insert(component.cpp_name.clone(), component.name().to_string());
@@ -201,18 +207,20 @@ impl ComponentRegistry {
 
         // Inline components
         while let Some(node) = nodes_to_visit.pop() {
-            if node.kind() == ts_kinds::UI_INLINE_COMPONENT {
+            if node.kind() == ts_kinds::UI_INLINE_COMPONENT
+                && let Some(comp_node) = node.child_by_field_name("component")
+            {
                 let name = node
                     .child_by_field_name("name")
                     .and_then(|n| n.utf8_text(text_bytes).ok())
                     .unwrap_or_default();
 
-                let prototype = node
-                    .child_by_field_name("prototype")
+                let prototype = comp_node
+                    .child_by_field_name("type_name")
                     .and_then(|n| n.utf8_text(text_bytes).ok())
                     .map(String::from);
 
-                let properties = node
+                let properties = comp_node
                     .children(&mut node.walk())
                     .find(|node| node.kind() == ts_kinds::UI_OBJECT_INITIALIZER)
                     .map(|init| Self::extract_properties(init, text_bytes))
@@ -298,7 +306,7 @@ impl ComponentRegistry {
         let mut cursor = node.walk();
 
         node.children(&mut cursor).for_each(|child| {
-            if child.kind() != ts_kinds::UI_PROPERTY_DECLARATION {
+            if child.kind() != ts_kinds::UI_PROPERTY {
                 return;
             }
 
@@ -312,7 +320,6 @@ impl ComponentRegistry {
 
             let type_name = child
                 .child_by_field_name("type")
-                .or_else(|| child.child_by_field_name("type_name"))
                 .and_then(|n| n.utf8_text(source).ok())
                 .unwrap_or("var")
                 .to_string();
@@ -343,7 +350,11 @@ impl ComponentRegistry {
                 }
                 let value_node = inner_child.child_by_field_name("value")?;
                 let raw_string = value_node.utf8_text(source).unwrap_or("");
-                return Some(raw_string.trim_matches('"').to_string());
+                return Some(
+                    raw_string
+                        .trim_matches(&['"', '\'', ';', '“', ' ', '\n'])
+                        .to_string(),
+                );
             })
         })
     }

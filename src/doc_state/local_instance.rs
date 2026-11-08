@@ -12,35 +12,51 @@ pub struct LocalInstance {
 }
 
 impl LocalInstance {
-    pub fn build_tree(node: Node, source: &[u8]) -> Vec<LocalInstance> {
+    pub fn build_tree(node: Node, source: &[u8], doc_name: Option<&str>) -> Vec<LocalInstance> {
         let mut instances = Vec::new();
         let mut cursor = node.walk();
 
         for child in node.children(&mut cursor) {
-            if child.kind() == ts_kinds::UI_OBJECT_DEFINITION {
-                instances.push(Self::parse_object(child, source));
+            if child.kind() == ts_kinds::UI_OBJECT_DEFINITION
+                || child.kind() == ts_kinds::UI_INLINE_COMPONENT
+            {
+                instances.push(Self::parse_object(child, source, doc_name));
             } else {
-                instances.append(&mut Self::build_tree(child, source));
+                instances.append(&mut Self::build_tree(child, source, None));
             }
         }
 
         instances
     }
 
-    fn parse_object(node: Node, source: &[u8]) -> LocalInstance {
-        let type_name = node
-            .child_by_field_name("type_name")
-            .and_then(|n| n.utf8_text(source).ok())
-            .unwrap_or("Item")
-            .to_string();
+    fn parse_object(node: Node, source: &[u8], doc_name: Option<&str>) -> LocalInstance {
+        let type_name = if node.kind() == ts_kinds::UI_INLINE_COMPONENT {
+            node.child_by_field_name("name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .unwrap_or("Item")
+                .to_string()
+        } else if let Some(name) = doc_name {
+            name.to_string()
+        } else {
+            node.child_by_field_name("type_name")
+                .and_then(|n| n.utf8_text(source).ok())
+                .unwrap_or("Item")
+                .to_string()
+        };
+
+        let target_node = if node.kind() == ts_kinds::UI_INLINE_COMPONENT {
+            node.child_by_field_name("component").unwrap_or(node)
+        } else {
+            node
+        };
 
         let byte_range = node.byte_range();
         let mut properties = Vec::new();
         let mut children = Vec::new();
         let mut id = None;
 
-        let mut cursor = node.walk();
-        if let Some(initializer) = node
+        let mut cursor = target_node.walk();
+        if let Some(initializer) = target_node
             .children(&mut cursor)
             .find(|n| n.kind() == ts_kinds::UI_OBJECT_INITIALIZER)
         {
@@ -54,7 +70,7 @@ impl LocalInstance {
                         }
                     }
                     ts_kinds::UI_OBJECT_DEFINITION => {
-                        children.push(Self::parse_object(item, source));
+                        children.push(Self::parse_object(item, source, None));
                     }
                     ts_kinds::UI_BINDING => {
                         if let Some(name_node) = item.child_by_field_name("name") {
@@ -67,8 +83,12 @@ impl LocalInstance {
                                 }
                             }
                         }
+
+                        children.append(&mut Self::build_tree(item, source, None));
                     }
-                    _ => {}
+                    _ => {
+                        children.append(&mut Self::build_tree(item, source, None));
+                    }
                 }
             }
         }
