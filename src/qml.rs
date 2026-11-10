@@ -13,9 +13,19 @@ pub enum QMLPropertyType {
     Custom(String),
 }
 
+#[derive(Default)]
+pub enum QMLPropertyModifier {
+    #[default]
+    None,
+    Readonly,
+    Required,
+    Default,
+}
+
 pub struct QMLProperty {
     pub name: String,
     pub p_type: QMLPropertyType,
+    pub modifier: QMLPropertyModifier,
 }
 
 pub struct QMLSignal {
@@ -85,6 +95,32 @@ impl fmt::Display for QMLPropertyType {
             QMLPropertyType::BuiltIn(basic_type) => write!(f, "{}", basic_type),
             QMLPropertyType::Custom(custom) => write!(f, "{}", custom),
         }
+    }
+}
+
+impl FromStr for QMLPropertyModifier {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "" => Ok(QMLPropertyModifier::None),
+            "readonly" => Ok(QMLPropertyModifier::Readonly),
+            "required" => Ok(QMLPropertyModifier::Required),
+            "default" => Ok(QMLPropertyModifier::Default),
+            _ => Err(()),
+        }
+    }
+}
+
+impl fmt::Display for QMLPropertyModifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let property_modifier_str = match self {
+            QMLPropertyModifier::None => "",
+            QMLPropertyModifier::Readonly => "readonly ",
+            QMLPropertyModifier::Required => "required ",
+            QMLPropertyModifier::Default => "default ",
+        };
+        write!(f, "{}", property_modifier_str)
     }
 }
 

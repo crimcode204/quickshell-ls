@@ -95,7 +95,10 @@ fn component_hover_info(component: &QMLComponent) -> Hover {
 
 fn property_hover_info(property: &QMLProperty, parent_comp_name: &str) -> Hover {
     let mut builder = HoverBuilder::new()
-        .signature(format!("property {}: {}", property.name, property.p_type))
+        .signature(format!(
+            "{}property {}: {}",
+            property.modifier, property.name, property.p_type
+        ))
         .prop_owner(parent_comp_name);
 
     if let Some(parent_docs) = QT_DOCS.get(parent_comp_name) {

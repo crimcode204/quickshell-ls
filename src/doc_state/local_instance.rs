@@ -1,7 +1,10 @@
-use std::ops::Range;
+use std::{ops::Range, str::FromStr};
 use tree_sitter::Node;
 
-use crate::{qml::QMLProperty, ts_kinds};
+use crate::{
+    qml::{QMLProperty, QMLPropertyModifier},
+    ts_kinds,
+};
 
 pub struct LocalInstance {
     pub(crate) byte_range: Range<usize>,
@@ -116,9 +119,17 @@ impl LocalInstance {
             .unwrap_or("var")
             .to_string();
 
+        let modifier = node
+            .children(&mut node.walk())
+            .find(|inner_child| inner_child.kind() == ts_kinds::UI_PROPERTY_MODIFIER)
+            .and_then(|inner_child| inner_child.utf8_text(source).ok())
+            .and_then(|text| QMLPropertyModifier::from_str(text).ok())
+            .unwrap_or_default();
+
         Some(QMLProperty {
             name,
             p_type: type_name.into(),
+            modifier,
         })
     }
 }

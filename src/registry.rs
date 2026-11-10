@@ -1,11 +1,11 @@
-use std::{path::Path, sync::LazyLock};
+use std::{path::Path, str::FromStr, sync::LazyLock};
 
 use dashmap::DashMap;
 use tokio::fs;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::{
-    qml::{QMLComponent, QMLProperty},
+    qml::{QMLComponent, QMLProperty, QMLPropertyModifier},
     ts_kinds,
 };
 
@@ -253,6 +253,8 @@ impl ComponentRegistry {
         let exports = Self::find_binding_value(node, "exports", source);
         let (qml_name, module) = Self::resolve_qml_name_and_module(exports);
 
+        let default_prop_name = Self::find_binding_value(node, "defaultProperty", source);
+
         let mut properties = Vec::new();
 
         let mut cursor = node.walk();
@@ -267,7 +269,10 @@ impl ComponentRegistry {
                 };
                 match type_node.utf8_text(source).unwrap_or("") {
                     "Property" => {
-                        if let Some(prop) = Self::extract_property(inner_child, source) {
+                        if let Some(mut prop) = Self::extract_property(inner_child, source) {
+                            if Some(&prop.name) == default_prop_name.as_ref() {
+                                prop.modifier = QMLPropertyModifier::Default;
+                            }
                             properties.push(prop);
                         }
                     }
@@ -294,10 +299,17 @@ impl ComponentRegistry {
         let name = Self::find_binding_value(node, "name", source)?;
         let type_name =
             Self::find_binding_value(node, "type", source).unwrap_or_else(|| "var".to_string());
+        let is_readonly =
+            Self::find_binding_value(node, "isReadonly", source).is_some_and(|val| val == "true");
 
         Some(QMLProperty {
             name,
             p_type: type_name.into(),
+            modifier: if is_readonly {
+                crate::qml::QMLPropertyModifier::Readonly
+            } else {
+                crate::qml::QMLPropertyModifier::None
+            },
         })
     }
 
@@ -324,9 +336,17 @@ impl ComponentRegistry {
                 .unwrap_or("var")
                 .to_string();
 
+            let modifier = child
+                .children(&mut child.walk())
+                .find(|inner_child| inner_child.kind() == ts_kinds::UI_PROPERTY_MODIFIER)
+                .and_then(|inner_child| inner_child.utf8_text(source).ok())
+                .and_then(|text| QMLPropertyModifier::from_str(text).ok())
+                .unwrap_or_default();
+
             properties.push(QMLProperty {
                 name,
                 p_type: type_name.into(),
+                modifier,
             });
         });
 
