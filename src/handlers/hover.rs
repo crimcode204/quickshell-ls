@@ -5,7 +5,7 @@ use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::{
     doc_state::DocState,
-    handlers::resolver::{ExpressionMember, resolve_expression, resolve_prototype},
+    handlers::resolver::{ExpressionMember, resolve_component, resolve_expression},
     qml::{QMLComponent, QMLProperty},
     registry::ComponentRegistry,
 };
@@ -41,7 +41,7 @@ pub fn hover(
             let mut current_proto = Some(component.cpp_name.clone());
 
             while let Some(proto_name) = current_proto {
-                let Some(parent_comp) = resolve_prototype(&proto_name, doc_state, workspace) else {
+                let Some(parent_comp) = resolve_component(&proto_name, doc_state, workspace) else {
                     break;
                 };
                 if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == prop_name) {

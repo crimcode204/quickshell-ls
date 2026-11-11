@@ -46,16 +46,14 @@ impl ComponentRegistry {
         self.components.remove(name);
     }
 
-    /// Resolves a prototype name
-    /// Prototype names have 2 forms: C++ (builtin types) or QML (local files)
-    pub fn resolve_prototype(
+    pub fn resolve_by_cpp_name(
         &self,
-        proto_name: &str,
+        cpp_name: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, QMLComponent>> {
-        if let Some(translated_qml_name) = self.cpp_to_qml.get(proto_name) {
+        if let Some(translated_qml_name) = self.cpp_to_qml.get(cpp_name) {
             return self.components.get(translated_qml_name.value());
         }
-        self.components.get(proto_name)
+        self.components.get(cpp_name)
     }
 
     pub async fn index_directory(&self, root_path: impl AsRef<Path>) {

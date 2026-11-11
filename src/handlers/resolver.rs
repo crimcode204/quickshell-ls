@@ -27,21 +27,13 @@ pub fn resolve_component<'a>(
     workspace: &'a ComponentRegistry,
 ) -> Option<Ref<'a, String, QMLComponent>> {
     let local_name = format!("{}.{}", doc_state.name, name);
-    match workspace.component(&local_name) {
-        Some(comp) => Some(comp),
-        None => workspace.component(name),
-    }
-}
 
-pub fn resolve_prototype<'a>(
-    proto_name: &str,
-    doc_state: &DocState,
-    workspace: &'a ComponentRegistry,
-) -> Option<Ref<'a, String, QMLComponent>> {
-    let local_name = format!("{}.{}", doc_state.name, proto_name);
     match workspace.component(&local_name) {
         Some(comp) => Some(comp),
-        None => workspace.resolve_prototype(proto_name),
+        None => match workspace.component(name) {
+            Some(comp) => Some(comp),
+            None => workspace.resolve_by_cpp_name(name),
+        },
     }
 }
 
@@ -54,7 +46,7 @@ pub fn component_has_property(
     let mut current_proto = Some(component.cpp_name.clone());
 
     while let Some(proto_name) = current_proto {
-        let Some(parent_comp) = resolve_prototype(&proto_name, doc_state, workspace) else {
+        let Some(parent_comp) = resolve_component(&proto_name, doc_state, workspace) else {
             break;
         };
         if parent_comp.properties.iter().any(|p| p.name == prop_name) {
@@ -255,7 +247,7 @@ pub fn resolve_member_access<'a>(
         } => {
             let mut current_proto = Some(component.cpp_name.clone());
             while let Some(proto_name) = current_proto {
-                let Some(parent_comp) = resolve_prototype(&proto_name, doc_state, workspace) else {
+                let Some(parent_comp) = resolve_component(&proto_name, doc_state, workspace) else {
                     break;
                 };
 
