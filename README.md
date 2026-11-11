@@ -16,7 +16,7 @@ cargo run --bin qt_docs_scraper
 ## Capabilities
 
 - [x] Document Synchronization
-- [x] Hover (only for components for now)
+- [x] Hover
 - [ ] Go to definition
 - [ ] Formatting
 - [ ] Diagnostics
