@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{Arc, OnceLock},
 };
@@ -142,20 +143,26 @@ impl LanguageServer for QuickshellLanguageServer {
                 }
             }
 
-            let qt_paths_cmd = std::process::Command::new("qtpaths")
-                .args(["--query", "QT_INSTALL_QML"])
-                .output()
-                .or_else(|_| {
-                    std::process::Command::new("qmake")
-                        .args(["-query", "QT_INSTALL_QML"])
+            let qt_paths: HashSet<String> = ["qtpaths6", "qtpaths", "qmake6", "qmake"]
+                .into_iter()
+                .filter_map(|tool| {
+                    let flag = if tool.starts_with("qmake") {
+                        "-query"
+                    } else {
+                        "--query"
+                    };
+                    std::process::Command::new(tool)
+                        .args([flag, "QT_INSTALL_QML"])
                         .output()
-                });
+                        .ok()
+                })
+                .filter(|output| output.status.success())
+                .filter_map(|output| String::from_utf8(output.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .collect();
 
-            if let Ok(output) = qt_paths_cmd
-                && output.status.success()
-                && let Ok(path_str) = String::from_utf8(output.stdout)
-            {
-                workspace.index_directory(path_str.trim()).await;
+            for path in qt_paths {
+                workspace.index_directory(path).await;
             }
         });
     }
