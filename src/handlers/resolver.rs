@@ -146,6 +146,17 @@ pub fn resolve_identifier<'a>(
     doc_state: &'a DocState,
     workspace: &'a ComponentRegistry,
 ) -> Option<ExpressionMember<'a>> {
+    if name == "parent" {
+        let mut path = Vec::new();
+        get_instance_path(&doc_state.instances, byte_offset, &mut path);
+
+        if path.len() >= 2 {
+            let parent_instance = path[path.len() - 2];
+
+            return Some(ExpressionMember::IdReference(parent_instance));
+        }
+    }
+
     if let Some(instance) = resolve_id(name, doc_state) {
         return Some(ExpressionMember::IdReference(instance));
     }
