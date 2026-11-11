@@ -177,6 +177,15 @@ pub fn resolve_expression<'a>(
     match node.kind() {
         ts_kinds::IDENTIFIER | ts_kinds::TYPE_IDENTIFIER => {
             let name = doc_state.node_text(&node);
+
+            if let Some(parent) = node.parent()
+                && matches!(parent.kind(), ts_kinds::UI_BINDING | ts_kinds::UI_PROPERTY)
+                && let Some(name_node) = parent.child_by_field_name("name")
+                && name_node.id() == node.id()
+            {
+                return resolve_property_in_scope(node.start_byte(), &name, doc_state, workspace);
+            }
+
             resolve_identifier(node.start_byte(), &name, doc_state, workspace)
         }
         ts_kinds::PROPERTY_IDENTIFIER => {
