@@ -178,12 +178,35 @@ pub fn resolve_expression<'a>(
         ts_kinds::IDENTIFIER | ts_kinds::TYPE_IDENTIFIER => {
             let name = doc_state.node_text(&node);
 
-            if let Some(parent) = node.parent()
-                && matches!(parent.kind(), ts_kinds::UI_BINDING | ts_kinds::UI_PROPERTY)
-                && let Some(name_node) = parent.child_by_field_name("name")
-                && name_node.id() == node.id()
-            {
-                return resolve_property_in_scope(node.start_byte(), &name, doc_state, workspace);
+            if let Some(parent) = node.parent() {
+                if parent.kind() == ts_kinds::NESTED_IDENTIFIER
+                    && let Some(right_node) = parent.child(2)
+                    && right_node.id() == node.id()
+                    && let Some(object_node) = parent.child(0)
+                {
+                    return resolve_member_access(object_node, &name, doc_state, workspace);
+                }
+
+                let binding_node = if parent.kind() == ts_kinds::NESTED_IDENTIFIER {
+                    parent.parent()
+                } else {
+                    Some(parent)
+                };
+
+                if let Some(binding) = binding_node
+                    && matches!(binding.kind(), ts_kinds::UI_BINDING | ts_kinds::UI_PROPERTY)
+                    && let Some(name_node) = parent.child_by_field_name("name")
+                    && (name_node.id() == node.id()
+                        || (parent.kind() == ts_kinds::NESTED_IDENTIFIER
+                            && name_node.id() == parent.id()))
+                {
+                    return resolve_property_in_scope(
+                        node.start_byte(),
+                        &name,
+                        doc_state,
+                        workspace,
+                    );
+                }
             }
 
             resolve_identifier(node.start_byte(), &name, doc_state, workspace)
