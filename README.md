@@ -23,3 +23,7 @@ cargo run --bin qt_docs_scraper
 - [ ] Signature help
 - [ ] Completions
 - [ ] Rename
+
+## TODO
+
+- [ ] Implement QML value types scraping (QFont)
