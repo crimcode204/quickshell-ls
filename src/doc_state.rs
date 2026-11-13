@@ -110,4 +110,10 @@ impl DocState {
     pub fn node_text(&self, node: &tree_sitter::Node) -> String {
         self.text.byte_slice(node.byte_range()).to_string()
     }
+
+    pub fn byte_offset_at(&self, position: tower_lsp::lsp_types::Position) -> usize {
+        let line = (position.line as usize).min(self.text.line_len().saturating_sub(1));
+        let line_byte = self.text.byte_of_line(line);
+        (line_byte + position.character as usize).min(self.text.byte_len())
+    }
 }

@@ -1,24 +1,14 @@
-use std::{collections::HashMap, sync::LazyLock};
-
-use serde::Deserialize;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind};
 
 use crate::{
     doc_state::DocState,
-    handlers::resolver::{ExpressionMember, resolve_component, resolve_expression},
+    handlers::{
+        QT_DOCS,
+        resolver::{ExpressionMember, resolve_expression},
+    },
     qml::{QMLComponent, QMLProperty},
     registry::ComponentRegistry,
 };
-
-#[derive(Deserialize)]
-struct QtComponentDocs {
-    description: String,
-    properties: HashMap<String, String>,
-}
-
-static QT_DOCS: LazyLock<HashMap<String, QtComponentDocs>> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../data/qt_docs.json")).unwrap_or_default()
-});
 
 pub fn hover(
     position: tower_lsp::lsp_types::Position,
@@ -28,29 +18,13 @@ pub fn hover(
     let node = doc_state.node_at(position)?;
 
     match resolve_expression(node, doc_state, workspace)? {
-        ExpressionMember::LocalProperty {
-            property,
-            owner_type_name,
-        } => {
-            return Some(property_hover_info(&property, owner_type_name));
+        ExpressionMember::LocalProperty { property, instance } => {
+            return Some(property_hover_info(property, &instance.type_name));
         }
         ExpressionMember::GlobalProperty {
+            property,
             component,
-            prop_name,
-        } => {
-            let mut current_proto = Some(component.cpp_name.clone());
-
-            while let Some(proto_name) = current_proto {
-                let Some(parent_comp) = resolve_component(&proto_name, doc_state, workspace) else {
-                    break;
-                };
-                if let Some(prop) = parent_comp.properties.iter().find(|p| p.name == prop_name) {
-                    return Some(property_hover_info(&prop, component.name()));
-                }
-                current_proto = parent_comp.prototype.clone();
-            }
-            return None;
-        }
+        } => return Some(property_hover_info(property, component.name())),
         ExpressionMember::Component(component) => return Some(component_hover_info(&component)),
         ExpressionMember::IdReference(instance) => {
             let signature = format!("id {}: {}", doc_state.node_text(&node), instance.type_name);

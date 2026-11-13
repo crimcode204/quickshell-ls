@@ -1,6 +1,10 @@
-use std::{path::Path, str::FromStr, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    path::Path,
+    str::FromStr,
+    sync::{LazyLock, RwLock},
+};
 
-use dashmap::DashMap;
 use tokio::fs;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
@@ -20,43 +24,66 @@ static QMLTYPES_QUERY: LazyLock<Query> = LazyLock::new(|| {
 });
 
 pub struct ComponentRegistry {
-    components: DashMap<String, QMLComponent>,
-    cpp_to_qml: DashMap<String, String>,
+    components: HashMap<String, QMLComponent>,
+    cpp_to_qml: HashMap<String, String>,
 }
 
 impl ComponentRegistry {
     /// Returns a new workspace state
     pub fn new() -> Self {
         Self {
-            components: DashMap::new(),
-            cpp_to_qml: DashMap::new(),
+            components: HashMap::new(),
+            cpp_to_qml: HashMap::new(),
         }
     }
 
     /// Returns the component with a given name
     /// This uses the qml name, for getting a component by its cpp name use [`component_by_cpp_name()`]
-    pub fn component(
-        &self,
-        name: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, QMLComponent>> {
+    pub fn component(&self, name: &str) -> Option<&QMLComponent> {
         self.components.get(name)
     }
 
-    pub fn remove_component(&self, name: &str) {
-        self.components.remove(name);
+    /// Adds a component to the registry
+    /// If it already exists, this only extends the property list of that component
+    pub fn add_component(&mut self, component: QMLComponent) {
+        if let Some(registered) = self.components.get_mut(component.name()) {
+            component.properties.into_iter().for_each(|prop| {
+                if !registered.properties.iter().any(|p| p.name == prop.name) {
+                    registered.properties.push(prop);
+                }
+            })
+        } else {
+            self.cpp_to_qml
+                .insert(component.cpp_name.clone(), component.name().to_string());
+            self.components
+                .insert(component.name().to_string(), component);
+        }
     }
 
-    pub fn resolve_by_cpp_name(
-        &self,
-        cpp_name: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, QMLComponent>> {
+    /// Removes a component along with it's inline components
+    pub fn remove_component(&mut self, name: &str) {
+        if let Some(comp) = self.components.remove(name) {
+            self.cpp_to_qml.remove(&comp.cpp_name);
+        }
+        let inline_prefix = format!("{}", name);
+        self.components.retain(|name, comp| {
+            if name.starts_with(&inline_prefix) {
+                self.cpp_to_qml.remove(&comp.cpp_name);
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    pub fn resolve_by_cpp_name(&self, cpp_name: &str) -> Option<&QMLComponent> {
         if let Some(translated_qml_name) = self.cpp_to_qml.get(cpp_name) {
-            return self.components.get(translated_qml_name.value());
+            return self.components.get(translated_qml_name);
         }
         self.components.get(cpp_name)
     }
 
-    pub async fn index_directory(&self, root_path: impl AsRef<Path>) {
+    pub async fn index_directory(registry: &RwLock<Self>, root_path: impl AsRef<Path>) {
         let mut dirs_to_visit = vec![root_path.as_ref().to_path_buf()];
 
         while let Some(dir) = dirs_to_visit.pop() {
@@ -79,21 +106,32 @@ impl ComponentRegistry {
                 };
                 if extension == "qmltypes" {
                     if let Ok(content) = fs::read_to_string(&path).await {
-                        self.parse_qmltypes(&content);
+                        let components = Self::parse_qmltypes_file(&content);
+                        if let Ok(mut guard) = registry.write() {
+                            components
+                                .into_iter()
+                                .for_each(|comp| guard.add_component(comp));
+                        }
                     }
                 } else if extension == "qml" {
                     if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str())
                         && file_stem.chars().next().map_or(false, |c| c.is_uppercase())
                         && let Ok(content) = tokio::fs::read_to_string(&path).await
                     {
-                        self.parse_qml_file(&content, &path, root_path.as_ref());
+                        let components = Self::parse_qml_file(&content, &path, root_path.as_ref());
+                        if let Ok(mut guard) = registry.write() {
+                            components
+                                .into_iter()
+                                .for_each(|comp| guard.add_component(comp));
+                        }
                     }
                 }
             }
         }
     }
 
-    pub fn parse_qmltypes(&self, source: &str) {
+    pub fn parse_qmltypes_file(source: &str) -> Vec<QMLComponent> {
+        let mut components = Vec::new();
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_qmljs::LANGUAGE.into())
@@ -115,34 +153,18 @@ impl ComponentRegistry {
                     }
 
                     let component_node = capture.node.parent().unwrap();
-                    let Some(component) = Self::extract_component(component_node, text_bytes)
-                    else {
-                        return;
-                    };
-
-                    if let Some(mut registered_component) =
-                        self.components.get_mut(component.name())
-                    {
-                        component.properties.into_iter().for_each(|prop| {
-                            if !registered_component
-                                .properties
-                                .iter()
-                                .any(|p| p.name == prop.name)
-                            {
-                                registered_component.properties.push(prop);
-                            }
-                        });
-                    } else {
-                        self.cpp_to_qml
-                            .insert(component.cpp_name.clone(), component.name().to_string());
-                        self.components
-                            .insert(component.name().to_string(), component);
+                    if let Some(component) = Self::extract_component(component_node, text_bytes) {
+                        components.push(component);
                     }
                 }
             });
+
+        components
     }
 
-    pub fn parse_qml_file(&self, source: &str, file_path: &Path, root_path: &Path) {
+    pub fn parse_qml_file(source: &str, file_path: &Path, root_path: &Path) -> Vec<QMLComponent> {
+        let mut components = Vec::new();
+
         let file_name = file_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -197,7 +219,7 @@ impl ComponentRegistry {
                 signals: vec![],
                 methods: vec![],
             };
-            self.components.insert(file_name.to_string(), component);
+            components.push(component);
         }
 
         let mut nodes_to_visit = vec![root_node];
@@ -236,13 +258,15 @@ impl ComponentRegistry {
                     methods: vec![],
                 };
 
-                self.components.insert(composite_name, component);
+                components.push(component);
             }
 
             for child in node.children(&mut cursor) {
                 nodes_to_visit.push(child);
             }
         }
+
+        components
     }
 
     fn extract_component(node: Node, source: &[u8]) -> Option<QMLComponent> {

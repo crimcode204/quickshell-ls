@@ -1,9 +1,8 @@
-use dashmap::mapref::one::Ref;
 use tree_sitter::Node;
 
 use crate::{
     doc_state::{DocState, LocalInstance},
-    qml::{QMLComponent, QMLProperty},
+    qml::{QMLComponent, QMLProperty, QMLPropertyType},
     registry::ComponentRegistry,
     ts_kinds,
 };
@@ -11,50 +10,31 @@ use crate::{
 pub enum ExpressionMember<'a> {
     LocalProperty {
         property: &'a QMLProperty,
-        owner_type_name: &'a str,
+        instance: &'a LocalInstance,
     },
     GlobalProperty {
-        component: Ref<'a, String, QMLComponent>,
-        prop_name: String,
+        property: &'a QMLProperty,
+        component: &'a QMLComponent,
     },
-    Component(Ref<'a, String, QMLComponent>),
+    Component(&'a QMLComponent),
     IdReference(&'a LocalInstance),
 }
 
 pub fn resolve_component<'a>(
     name: &str,
     doc_state: &DocState,
-    workspace: &'a ComponentRegistry,
-) -> Option<Ref<'a, String, QMLComponent>> {
+    registry: &'a ComponentRegistry,
+) -> Option<&'a QMLComponent> {
     let local_name = format!("{}.{}", doc_state.name, name);
-
-    match workspace.component(&local_name) {
-        Some(comp) => Some(comp),
-        None => match workspace.component(name) {
-            Some(comp) => Some(comp),
-            None => workspace.resolve_by_cpp_name(name),
-        },
+    if let Some(comp) = registry.component(&local_name) {
+        return Some(comp);
     }
-}
 
-pub fn component_has_property(
-    prop_name: &str,
-    component: &QMLComponent,
-    doc_state: &DocState,
-    workspace: &ComponentRegistry,
-) -> bool {
-    let mut current_proto = Some(component.cpp_name.clone());
-
-    while let Some(proto_name) = current_proto {
-        let Some(parent_comp) = resolve_component(&proto_name, doc_state, workspace) else {
-            break;
-        };
-        if parent_comp.properties.iter().any(|p| p.name == prop_name) {
-            return true;
-        }
-        current_proto = parent_comp.prototype.clone();
+    if let Some(comp) = registry.component(name) {
+        return Some(comp);
     }
-    false
+
+    registry.resolve_by_cpp_name(name)
 }
 
 fn get_instance_path<'a>(
@@ -75,7 +55,7 @@ pub fn resolve_property_in_scope<'a>(
     byte_offset: usize,
     prop_name: &str,
     doc_state: &'a DocState,
-    workspace: &'a ComponentRegistry,
+    registry: &'a ComponentRegistry,
 ) -> Option<ExpressionMember<'a>> {
     let mut path = Vec::new();
     get_instance_path(&doc_state.instances, byte_offset, &mut path);
@@ -84,17 +64,14 @@ pub fn resolve_property_in_scope<'a>(
         if let Some(prop) = instance.properties.iter().find(|p| p.name == prop_name) {
             return Some(ExpressionMember::LocalProperty {
                 property: prop,
-                owner_type_name: &instance.type_name,
+                instance,
             });
         }
 
-        if let Some(component) = resolve_component(&instance.type_name, doc_state, workspace) {
-            if component_has_property(prop_name, &component, doc_state, workspace) {
-                return Some(ExpressionMember::GlobalProperty {
-                    component,
-                    prop_name: prop_name.into(),
-                });
-            }
+        if let Some(global_prop) =
+            resolve_property_on_type(&instance.type_name, prop_name, doc_state, registry)
+        {
+            return Some(global_prop);
         }
     }
 
@@ -127,16 +104,21 @@ pub fn resolve_property_on_type<'a>(
     type_name: &str,
     prop_name: &str,
     doc_state: &'a DocState,
-    workspace: &'a ComponentRegistry,
+    registry: &'a ComponentRegistry,
 ) -> Option<ExpressionMember<'a>> {
-    let component = resolve_component(type_name, doc_state, workspace)?;
+    let mut current_proto = Some(type_name);
 
-    if component_has_property(prop_name, &component, doc_state, workspace) {
-        return Some(ExpressionMember::GlobalProperty {
-            component,
-            prop_name: prop_name.into(),
-        });
+    while let Some(proto_name) = current_proto {
+        let comp = resolve_component(proto_name, doc_state, registry)?;
+        if let Some(property) = comp.properties.iter().find(|p| p.name == prop_name) {
+            return Some(ExpressionMember::GlobalProperty {
+                property,
+                component: comp,
+            });
+        }
+        current_proto = comp.prototype.as_deref();
     }
+
     None
 }
 
@@ -144,7 +126,7 @@ pub fn resolve_identifier<'a>(
     byte_offset: usize,
     name: &str,
     doc_state: &'a DocState,
-    workspace: &'a ComponentRegistry,
+    registry: &'a ComponentRegistry,
 ) -> Option<ExpressionMember<'a>> {
     if name == "parent" {
         let mut path = Vec::new();
@@ -161,11 +143,11 @@ pub fn resolve_identifier<'a>(
         return Some(ExpressionMember::IdReference(instance));
     }
 
-    if let Some(resolved) = resolve_property_in_scope(byte_offset, name, doc_state, workspace) {
+    if let Some(resolved) = resolve_property_in_scope(byte_offset, name, doc_state, registry) {
         return Some(resolved);
     }
 
-    if let Some(component) = resolve_component(name, doc_state, workspace) {
+    if let Some(component) = resolve_component(name, doc_state, registry) {
         return Some(ExpressionMember::Component(component));
     }
 
@@ -175,7 +157,7 @@ pub fn resolve_identifier<'a>(
 pub fn resolve_expression<'a>(
     node: tree_sitter::Node<'_>,
     doc_state: &'a DocState,
-    workspace: &'a ComponentRegistry,
+    registry: &'a ComponentRegistry,
 ) -> Option<ExpressionMember<'a>> {
     match node.kind() {
         ts_kinds::IDENTIFIER | ts_kinds::TYPE_IDENTIFIER => {
@@ -187,7 +169,7 @@ pub fn resolve_expression<'a>(
                     && right_node.id() == node.id()
                     && let Some(object_node) = parent.child(0)
                 {
-                    return resolve_member_access(object_node, &name, doc_state, workspace);
+                    return resolve_member_access(object_node, &name, doc_state, registry);
                 }
 
                 let binding_node = if parent.kind() == ts_kinds::NESTED_IDENTIFIER {
@@ -207,18 +189,18 @@ pub fn resolve_expression<'a>(
                         node.start_byte(),
                         &name,
                         doc_state,
-                        workspace,
+                        registry,
                     );
                 }
             }
 
-            resolve_identifier(node.start_byte(), &name, doc_state, workspace)
+            resolve_identifier(node.start_byte(), &name, doc_state, registry)
         }
         ts_kinds::PROPERTY_IDENTIFIER => {
             if let Some(parent) = node.parent() {
                 let object_node = parent.child_by_field_name("object")?;
                 let prop_name = doc_state.node_text(&node);
-                return resolve_member_access(object_node, &prop_name, doc_state, workspace);
+                return resolve_member_access(object_node, &prop_name, doc_state, registry);
             }
             None
         }
@@ -232,7 +214,7 @@ pub fn resolve_expression<'a>(
 
             let property_name = doc_state.node_text(&property_node);
 
-            resolve_member_access(object_node, &property_name, doc_state, workspace)
+            resolve_member_access(object_node, &property_name, doc_state, registry)
         }
         _ => None,
     }
@@ -242,69 +224,96 @@ pub fn resolve_member_access<'a>(
     base_node: Node,
     prop_name: &str,
     doc_state: &'a DocState,
-    workspace: &'a ComponentRegistry,
+    registry: &'a ComponentRegistry,
 ) -> Option<ExpressionMember<'a>> {
-    match resolve_expression(base_node, doc_state, workspace)? {
+    match resolve_expression(base_node, doc_state, registry)? {
         ExpressionMember::LocalProperty { property, .. } => {
             let type_name = match &property.p_type {
                 crate::qml::QMLPropertyType::BuiltIn(_) => return None,
                 crate::qml::QMLPropertyType::Custom(custom_type) => custom_type,
             };
-            resolve_property_on_type(type_name, prop_name, doc_state, workspace)
+            resolve_property_on_type(type_name, prop_name, doc_state, registry)
         }
         ExpressionMember::GlobalProperty {
-            component,
-            prop_name: base_prop_name,
+            property,
+            component: owner,
         } => {
-            let mut current_proto = Some(component.cpp_name.clone());
-            while let Some(proto_name) = current_proto {
-                let Some(parent_comp) = resolve_component(&proto_name, doc_state, workspace) else {
-                    break;
-                };
+            let QMLPropertyType::Custom(type_name) = &property.p_type else {
+                return None;
+            };
 
-                if let Some(prop) = parent_comp
-                    .properties
-                    .iter()
-                    .find(|p| p.name == base_prop_name)
-                {
-                    let type_name = match &prop.p_type {
-                        crate::qml::QMLPropertyType::BuiltIn(_) => return None,
-                        crate::qml::QMLPropertyType::Custom(custom_type) => custom_type,
-                    };
+            let base_file_name = owner.name().split('.').next().unwrap_or(owner.name());
+            let composite_name = format!("{}.{}", base_file_name, type_name);
 
-                    let base_file_name = parent_comp
-                        .name()
-                        .split('.')
-                        .next()
-                        .unwrap_or(parent_comp.name());
-                    let composite_name = format!("{}.{}", base_file_name, type_name);
-
-                    if workspace.component(&composite_name).is_some() {
-                        return resolve_property_on_type(
-                            &composite_name,
-                            prop_name,
-                            doc_state,
-                            workspace,
-                        );
-                    }
-
-                    return resolve_property_on_type(type_name, prop_name, doc_state, workspace);
-                }
-                current_proto = parent_comp.prototype.clone();
+            if registry.component(&composite_name).is_some() {
+                return resolve_property_on_type(&composite_name, prop_name, doc_state, registry);
             }
-            None
+
+            resolve_property_on_type(type_name, prop_name, doc_state, registry)
         }
         ExpressionMember::Component(component) => {
-            resolve_property_on_type(component.name(), prop_name, doc_state, workspace)
+            resolve_property_on_type(component.name(), prop_name, doc_state, registry)
         }
         ExpressionMember::IdReference(instance) => {
             if let Some(prop) = instance.properties.iter().find(|p| p.name == prop_name) {
                 return Some(ExpressionMember::LocalProperty {
                     property: prop,
-                    owner_type_name: &instance.type_name,
+                    instance,
                 });
             }
-            resolve_property_on_type(&instance.type_name, prop_name, doc_state, workspace)
+            resolve_property_on_type(&instance.type_name, prop_name, doc_state, registry)
         }
     }
 }
+//
+// pub fn collect_type_properties<'a>(
+//     type_name: &str,
+//     doc_state: &'a DocState,
+//     registry: &'a ComponentRegistry,
+// ) -> Vec<(&'a QMLProperty, String)> {
+//     let mut properties = Vec::new();
+//     let mut seen = HashSet::new();
+//     let mut current_proto = Some(type_name);
+//
+//     while let Some(proto_name) = current_proto {
+//         let Some(comp) = resolve_component(&proto_name, doc_state, registry) else {
+//             break;
+//         };
+//         let owner_name = comp.name().to_string();
+//
+//         comp.properties.iter().for_each(|prop| {
+//             if seen.insert(&prop.name) {
+//                 properties.push((prop, owner_name.clone()));
+//             }
+//         });
+//
+//         current_proto = comp.prototype.as_deref();
+//     }
+//
+//     properties
+// }
+//
+// pub fn resolve_member_properties(
+//     base_node: Node,
+//     doc_state: &DocState,
+//     registry: &ComponentRegistry,
+// ) -> Vec<(QMLProperty, String)> {
+//     let Some(member) = resolve_expression(base_node, doc_state, registry) else {
+//         return Vec::new();
+//     };
+//
+//     match member {
+//         ExpressionMember::LocalProperty { property, .. } => match &property.p_type {
+//             crate::qml::QMLPropertyType::BuiltIn(_) => Vec::new(),
+//             crate::qml::QMLPropertyType::Custom(type_name) => {
+//                 collect_type_properties(type_name, doc_state, registry)
+//             }
+//         },
+//         ExpressionMember::GlobalProperty {
+//             component,
+//             prop_name,
+//         } => todo!(),
+//         ExpressionMember::Component(_) => todo!(),
+//         ExpressionMember::IdReference(local_instance) => todo!(),
+//     }
+// }

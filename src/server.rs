@@ -1,11 +1,10 @@
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::{Arc, OnceLock},
+    sync::{Mutex, OnceLock, RwLock},
 };
 
 use dashmap::DashMap;
-use tokio::sync::Mutex;
 use tower_lsp::{Client, LanguageServer, jsonrpc::Result, lsp_types::*};
 
 use crate::{doc_state::DocState, handlers, registry::ComponentRegistry};
@@ -14,7 +13,7 @@ pub struct QuickshellLanguageServer {
     _client: Client,
     parser: Mutex<tree_sitter::Parser>,
     documents: DashMap<Url, DocState>,
-    workspace: Arc<ComponentRegistry>,
+    registry: RwLock<ComponentRegistry>,
     root_path: OnceLock<PathBuf>,
 }
 
@@ -29,7 +28,7 @@ impl QuickshellLanguageServer {
             _client,
             parser: Mutex::new(parser),
             documents: DashMap::new(),
-            workspace: Arc::new(ComponentRegistry::new()),
+            registry: RwLock::new(ComponentRegistry::new()),
             root_path: OnceLock::new(),
         }
     }
@@ -58,6 +57,13 @@ impl LanguageServer for QuickshellLanguageServer {
                 version: Some("0.1.0".to_string()),
             }),
             capabilities: ServerCapabilities {
+                completion_provider: Some(CompletionOptions {
+                    resolve_provider: Some(false),
+                    trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
+                    all_commit_characters: None,
+                    work_done_progress_options: Default::default(),
+                    completion_item: None,
+                }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 position_encoding: Some(PositionEncodingKind::UTF8),
@@ -113,37 +119,30 @@ impl LanguageServer for QuickshellLanguageServer {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        let workspace = self.workspace.clone();
-        let root_path = self.root_path.get().cloned();
+        let mut paths = Vec::new();
 
-        tokio::spawn(async move {
-            if let Some(root) = root_path {
-                workspace.index_directory(&root).await;
+        if let Some(root) = self.root_path.get() {
+            paths.push(root.clone());
 
-                let ini_path = root.join(".qmlls.ini");
-                if let Ok(ini_content) = tokio::fs::read_to_string(&ini_path).await {
-                    for line in ini_content.lines() {
-                        let Some(import_paths) = line
-                            .strip_prefix("importPaths=")
-                            .map(|paths| paths.trim_matches('"'))
-                        else {
-                            continue;
-                        };
-
-                        for path in import_paths.split(':') {
-                            workspace.index_directory(path).await;
-                        }
-                    }
+            let ini_path = root.join(".qmlls.ini");
+            if let Ok(ini_content) = tokio::fs::read_to_string(&ini_path).await {
+                for line in ini_content.lines() {
+                    if let Some(import_paths) = line
+                        .strip_prefix("importPaths=")
+                        .map(|paths| paths.trim_matches('"'))
+                    {
+                        paths.extend(import_paths.split(':').map(PathBuf::from));
+                    };
                 }
             }
+        }
 
-            if let Ok(qml_paths) = std::env::var("QML_IMPORT_PATH") {
-                for path in std::env::split_paths(&qml_paths) {
-                    workspace.index_directory(path).await;
-                }
-            }
+        if let Ok(qml_paths) = std::env::var("QML_IMPORT_PATH") {
+            paths.extend(std::env::split_paths(&qml_paths));
+        }
 
-            let qt_paths: HashSet<String> = ["qtpaths6", "qtpaths", "qmake6", "qmake"]
+        paths.extend(
+            ["qtpaths6", "qtpaths", "qmake6", "qmake"]
                 .into_iter()
                 .filter_map(|tool| {
                     let flag = if tool.starts_with("qmake") {
@@ -158,13 +157,13 @@ impl LanguageServer for QuickshellLanguageServer {
                 })
                 .filter(|output| output.status.success())
                 .filter_map(|output| String::from_utf8(output.stdout).ok())
-                .map(|s| s.trim().to_string())
-                .collect();
+                .map(|s| PathBuf::from(s.trim()))
+                .collect::<HashSet<PathBuf>>(),
+        );
 
-            for path in qt_paths {
-                workspace.index_directory(path).await;
-            }
-        });
+        for path in paths {
+            ComponentRegistry::index_directory(&self.registry, path).await;
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -174,7 +173,6 @@ impl LanguageServer for QuickshellLanguageServer {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        let mut parser = self.parser.lock().await;
         let text = params.text_document.text;
         let file_stem = uri
             .to_file_path()
@@ -182,16 +180,18 @@ impl LanguageServer for QuickshellLanguageServer {
             .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_default();
 
-        let doc_state = DocState::new(file_stem, text, &mut parser);
-
-        self.documents.insert(uri, doc_state);
+        if let Ok(mut parser) = self.parser.lock() {
+            let doc_state = DocState::new(file_stem, text, &mut parser);
+            self.documents.insert(uri, doc_state);
+        }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        if let Some(mut doc_state) = self.documents.get_mut(&uri) {
-            let mut parser = self.parser.lock().await;
+        if let Some(mut doc_state) = self.documents.get_mut(&uri)
+            && let Ok(mut parser) = self.parser.lock()
+        {
             doc_state.update(params.content_changes, &mut parser);
         }
     }
@@ -203,8 +203,17 @@ impl LanguageServer for QuickshellLanguageServer {
             && let Ok(file_path) = uri.to_file_path()
             && let Some(root_path) = self.root_path.get()
         {
-            self.workspace
-                .parse_qml_file(&doc_state.text.to_string(), &file_path, root_path);
+            let components = ComponentRegistry::parse_qml_file(
+                &doc_state.text.to_string(),
+                &file_path,
+                root_path,
+            );
+            if let Ok(mut registry) = self.registry.write() {
+                registry.remove_component(&doc_state.name);
+                components
+                    .into_iter()
+                    .for_each(|comp| registry.add_component(comp));
+            }
         }
     }
 
@@ -228,7 +237,12 @@ impl LanguageServer for QuickshellLanguageServer {
                 && let Some(root_path) = self.root_path.get()
                 && let Ok(content) = tokio::fs::read_to_string(&path).await
             {
-                self.workspace.parse_qml_file(&content, &path, root_path);
+                let components = ComponentRegistry::parse_qml_file(&content, &path, root_path);
+                if let Ok(mut registry) = self.registry.write() {
+                    components
+                        .into_iter()
+                        .for_each(|comp| registry.add_component(comp));
+                }
             }
         }
     }
@@ -238,8 +252,9 @@ impl LanguageServer for QuickshellLanguageServer {
             if let Ok(old_uri) = Url::parse(&file.old_uri)
                 && let Ok(path) = old_uri.to_file_path()
                 && let Some(file_stem) = path.file_stem().and_then(|s| s.to_str())
+                && let Ok(mut registry) = self.registry.write()
             {
-                self.workspace.remove_component(file_stem);
+                registry.remove_component(file_stem);
             }
 
             if let Ok(new_uri) = Url::parse(&file.new_uri)
@@ -255,8 +270,12 @@ impl LanguageServer for QuickshellLanguageServer {
                 && let Some(root_path) = self.root_path.get()
                 && let Ok(content) = tokio::fs::read_to_string(&new_path).await
             {
-                self.workspace
-                    .parse_qml_file(&content, &new_path, root_path);
+                let components = ComponentRegistry::parse_qml_file(&content, &new_path, root_path);
+                if let Ok(mut registry) = self.registry.write() {
+                    components
+                        .into_iter()
+                        .for_each(|comp| registry.add_component(comp));
+                }
             }
         }
     }
@@ -266,8 +285,9 @@ impl LanguageServer for QuickshellLanguageServer {
             if let Ok(uri) = Url::parse(&file.uri)
                 && let Ok(path) = uri.to_file_path()
                 && let Some(file_stem) = path.file_stem().and_then(|s| s.to_str())
+                && let Ok(mut registry) = self.registry.write()
             {
-                self.workspace.remove_component(file_stem);
+                registry.remove_component(file_stem);
             }
         });
     }
@@ -291,10 +311,25 @@ impl LanguageServer for QuickshellLanguageServer {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        if let Some(doc_state) = self.documents.get(&uri) {
-            return Ok(handlers::hover(position, &doc_state, &self.workspace));
+        if let Some(doc_state) = self.documents.get(&uri)
+            && let Ok(registry) = self.registry.read()
+        {
+            return Ok(handlers::hover(position, &doc_state, &registry));
         }
 
         Ok(None)
     }
+
+    /*     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        if let Some(doc_state) = self.documents.get(&uri)
+            && let Ok(registry) = self.registry.read()
+        {
+            return Ok(handlers::completion(position, &doc_state, registry));
+        }
+
+        Ok(None)
+    } */
 }
