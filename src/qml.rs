@@ -13,7 +13,7 @@ pub enum QMLPropertyType {
     Custom(String),
 }
 
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq)]
 pub enum QMLPropertyModifier {
     #[default]
     None,

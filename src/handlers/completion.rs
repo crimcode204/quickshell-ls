@@ -1,5 +1,3 @@
-use std::ops::Add;
-
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, Documentation, MarkupContent,
     MarkupKind, Position,
@@ -15,13 +13,16 @@ use crate::{
             resolve_member_properties,
         },
     },
-    qml::QMLProperty,
+    qml::{QMLProperty, QMLPropertyModifier},
     registry::ComponentRegistry,
     ts_kinds,
 };
 
 enum CompletionContext<'a> {
-    MemberAccess(Node<'a>),
+    MemberAccess {
+        base_node: Node<'a>,
+        is_lhs_binding: bool,
+    },
     ComponentBody(usize),
     ValueExpression(usize),
     TopLevel,
@@ -36,12 +37,13 @@ pub fn completion(
     let context = detect_context(position, byte_offset, doc_state)?;
 
     let items = match context {
-        CompletionContext::MemberAccess(base_node) => {
-            resolve_member_properties(base_node, doc_state, registry)
-                .into_iter()
-                .map(|(prop, owner)| format_property_item(&prop, &owner, false))
-                .collect()
-        }
+        CompletionContext::MemberAccess {
+            base_node,
+            is_lhs_binding,
+        } => resolve_member_properties(base_node, doc_state, registry)
+            .into_iter()
+            .map(|(prop, owner)| format_property_item(&prop, &owner, is_lhs_binding))
+            .collect(),
         CompletionContext::ComponentBody(offset) => {
             let prop_items = collect_instance_properties_at(offset, doc_state, registry)
                 .into_iter()
@@ -87,7 +89,11 @@ fn detect_context<'a>(
     doc_state: &'a DocState,
 ) -> Option<CompletionContext<'a>> {
     if let Some(base_node) = find_member_base_node(position, byte_offset, doc_state) {
-        return Some(CompletionContext::MemberAccess(base_node));
+        let is_lhs_binding = is_on_binding_lhs(base_node, byte_offset);
+        return Some(CompletionContext::MemberAccess {
+            base_node,
+            is_lhs_binding,
+        });
     }
 
     let probe_pos = Position {
@@ -206,11 +212,12 @@ fn format_property_item(
             })
         });
 
+    let should_append_colon = append_colon && property.modifier != QMLPropertyModifier::Readonly;
     CompletionItem {
         label: property.name.clone(),
         kind: Some(CompletionItemKind::PROPERTY),
         detail: Some(format!("{} ({})", property.p_type, comp_name)),
-        insert_text: if append_colon {
+        insert_text: if should_append_colon {
             Some(format!("{}: ", property.name))
         } else {
             None
@@ -252,4 +259,22 @@ fn collect_component_items<'a>(
             ..Default::default()
         })
     })
+}
+
+fn is_on_binding_lhs(base_node: Node, byte_offset: usize) -> bool {
+    let mut current = Some(base_node);
+    while let Some(node) = current {
+        match node.kind() {
+            ts_kinds::UI_BINDING => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    return byte_offset <= name_node.end_byte() + 1;
+                }
+                return false;
+            }
+            ts_kinds::UI_PROPERTY => return false,
+            ts_kinds::UI_OBJECT_INITIALIZER => return true,
+            _ => current = node.parent(),
+        }
+    }
+    false
 }
