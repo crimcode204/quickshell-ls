@@ -320,16 +320,16 @@ impl LanguageServer for QuickshellLanguageServer {
         Ok(None)
     }
 
-    /*     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
         if let Some(doc_state) = self.documents.get(&uri)
             && let Ok(registry) = self.registry.read()
         {
-            return Ok(handlers::completion(position, &doc_state, registry));
+            return Ok(handlers::completion(position, &doc_state, &registry));
         }
 
         Ok(None)
-    } */
+    }
 }

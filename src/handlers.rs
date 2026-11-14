@@ -5,7 +5,7 @@ mod resolver;
 use serde::Deserialize;
 use std::{collections::HashMap, sync::LazyLock};
 
-// pub use completion::completion;
+pub use completion::completion;
 pub use hover::hover;
 
 #[derive(Deserialize)]

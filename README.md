@@ -21,7 +21,7 @@ cargo run --bin qt_docs_scraper
 - [ ] Formatting
 - [ ] Diagnostics
 - [ ] Signature help
-- [ ] Completions
+- [x] Completions
 - [ ] Rename
 
 ## TODO

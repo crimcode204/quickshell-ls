@@ -43,6 +43,11 @@ impl ComponentRegistry {
         self.components.get(name)
     }
 
+    /// Returns an iterator visiting all components in arbitrary order
+    pub fn components(&self) -> impl Iterator<Item = &QMLComponent> {
+        self.components.values()
+    }
+
     /// Adds a component to the registry
     /// If it already exists, this only extends the property list of that component
     pub fn add_component(&mut self, component: QMLComponent) {

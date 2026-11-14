@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use tree_sitter::Node;
 
 use crate::{
@@ -265,55 +267,175 @@ pub fn resolve_member_access<'a>(
         }
     }
 }
-//
-// pub fn collect_type_properties<'a>(
-//     type_name: &str,
-//     doc_state: &'a DocState,
-//     registry: &'a ComponentRegistry,
-// ) -> Vec<(&'a QMLProperty, String)> {
-//     let mut properties = Vec::new();
-//     let mut seen = HashSet::new();
-//     let mut current_proto = Some(type_name);
-//
-//     while let Some(proto_name) = current_proto {
-//         let Some(comp) = resolve_component(&proto_name, doc_state, registry) else {
-//             break;
-//         };
-//         let owner_name = comp.name().to_string();
-//
-//         comp.properties.iter().for_each(|prop| {
-//             if seen.insert(&prop.name) {
-//                 properties.push((prop, owner_name.clone()));
-//             }
-//         });
-//
-//         current_proto = comp.prototype.as_deref();
-//     }
-//
-//     properties
-// }
-//
-// pub fn resolve_member_properties(
-//     base_node: Node,
-//     doc_state: &DocState,
-//     registry: &ComponentRegistry,
-// ) -> Vec<(QMLProperty, String)> {
-//     let Some(member) = resolve_expression(base_node, doc_state, registry) else {
-//         return Vec::new();
-//     };
-//
-//     match member {
-//         ExpressionMember::LocalProperty { property, .. } => match &property.p_type {
-//             crate::qml::QMLPropertyType::BuiltIn(_) => Vec::new(),
-//             crate::qml::QMLPropertyType::Custom(type_name) => {
-//                 collect_type_properties(type_name, doc_state, registry)
-//             }
-//         },
-//         ExpressionMember::GlobalProperty {
-//             component,
-//             prop_name,
-//         } => todo!(),
-//         ExpressionMember::Component(_) => todo!(),
-//         ExpressionMember::IdReference(local_instance) => todo!(),
-//     }
-// }
+
+/// Walks the prototype chain of a `type_name` and collects all properties.
+pub fn collect_type_properties<'a>(
+    type_name: &str,
+    doc_state: &'a DocState,
+    registry: &'a ComponentRegistry,
+) -> Vec<(&'a QMLProperty, &'a str)> {
+    let mut properties = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current_proto = Some(type_name);
+
+    while let Some(proto_name) = current_proto {
+        let Some(comp) = resolve_component(&proto_name, doc_state, registry) else {
+            break;
+        };
+        let owner_name = comp.name();
+
+        comp.properties.iter().for_each(|prop| {
+            if seen.insert(prop.name.as_str()) {
+                properties.push((prop, owner_name));
+            }
+        });
+
+        current_proto = comp.prototype.as_deref();
+    }
+
+    properties
+}
+
+/// Resolves all properties available on a node(member) of an expression.
+pub fn resolve_member_properties<'a>(
+    base_node: Node,
+    doc_state: &'a DocState,
+    registry: &'a ComponentRegistry,
+) -> Vec<(&'a QMLProperty, &'a str)> {
+    let Some(member) = resolve_expression(base_node, doc_state, registry) else {
+        return Vec::new();
+    };
+
+    match member {
+        ExpressionMember::LocalProperty { property, .. } => match &property.p_type {
+            crate::qml::QMLPropertyType::BuiltIn(_) => Vec::new(),
+            crate::qml::QMLPropertyType::Custom(type_name) => {
+                collect_type_properties(type_name, doc_state, registry)
+            }
+        },
+        ExpressionMember::GlobalProperty {
+            property,
+            component,
+        } => {
+            let QMLPropertyType::Custom(type_name) = &property.p_type else {
+                return Vec::new();
+            };
+
+            let base_file = component
+                .name()
+                .split('.')
+                .next()
+                .unwrap_or(component.name());
+            let composite_name = format!("{}.{}", base_file, type_name);
+
+            if registry.component(&composite_name).is_some() {
+                return collect_type_properties(&composite_name, doc_state, registry);
+            }
+            collect_type_properties(type_name, doc_state, registry)
+        }
+        ExpressionMember::Component(component) => {
+            collect_type_properties(component.name(), doc_state, registry)
+        }
+        ExpressionMember::IdReference(instance) => {
+            let mut properties = Vec::new();
+            let mut seen = HashSet::new();
+            let component_name = instance.type_name.as_str();
+
+            instance.properties.iter().for_each(|prop| {
+                if seen.insert(prop.name.as_str()) {
+                    properties.push((prop, component_name));
+                }
+            });
+            collect_type_properties(&instance.type_name, doc_state, registry)
+                .iter()
+                .for_each(|(prop, comp)| {
+                    if seen.insert(prop.name.as_str()) {
+                        properties.push((prop, comp));
+                    }
+                });
+
+            properties
+        }
+    }
+}
+
+/// Collects properties belonging to the innermost enclosing `LocalInstance` at `byte_offset`.
+pub fn collect_instance_properties_at<'a>(
+    byte_offset: usize,
+    doc_state: &'a DocState,
+    registry: &'a ComponentRegistry,
+) -> Vec<(&'a QMLProperty, &'a str)> {
+    let mut path = Vec::new();
+    get_instance_path(&doc_state.instances, byte_offset, &mut path);
+
+    let Some(&instance) = path.last() else {
+        return Vec::new();
+    };
+
+    let mut properties = Vec::new();
+    let mut seen = HashSet::new();
+    let component_name = instance.type_name.as_str();
+
+    instance.properties.iter().for_each(|prop| {
+        if seen.insert(prop.name.as_str()) {
+            properties.push((prop, component_name));
+        }
+    });
+    collect_type_properties(&instance.type_name, doc_state, registry)
+        .iter()
+        .for_each(|(prop, comp)| {
+            if seen.insert(prop.name.as_str()) {
+                properties.push((prop, comp));
+            }
+        });
+
+    properties
+}
+
+/// Collects all unique properties accessible in the lexical scope chain at `byte_offset`.
+pub fn collect_scope_properties<'a>(
+    byte_offset: usize,
+    doc_state: &'a DocState,
+    registry: &'a ComponentRegistry,
+) -> Vec<(&'a QMLProperty, &'a str)> {
+    let mut path = Vec::new();
+    get_instance_path(&doc_state.instances, byte_offset, &mut path);
+
+    let mut properties = Vec::new();
+    let mut seen = HashSet::new();
+
+    path.into_iter().rev().for_each(|instance| {
+        let component_name = instance.type_name.as_str();
+
+        instance.properties.iter().for_each(|prop| {
+            if seen.insert(prop.name.as_str()) {
+                properties.push((prop, component_name));
+            }
+        });
+        collect_type_properties(&instance.type_name, doc_state, registry)
+            .iter()
+            .for_each(|(prop, comp)| {
+                if seen.insert(prop.name.as_str()) {
+                    properties.push((prop, comp));
+                }
+            });
+    });
+
+    properties
+}
+
+/// Collects all `(id, type_name)` pairs defined in the current document.
+pub fn collect_all_ids<'a>(doc_state: &'a DocState) -> Vec<(&'a str, &'a str)> {
+    fn walk<'a>(instances: &'a [LocalInstance], ids: &mut Vec<(&'a str, &'a str)>) {
+        instances.iter().for_each(|instance| {
+            if let Some(id) = instance.id.as_deref() {
+                ids.push((id, &instance.type_name));
+            }
+            walk(&instance.children, ids);
+        });
+    }
+
+    let mut ids = Vec::new();
+    walk(&doc_state.instances, &mut ids);
+    ids
+}
