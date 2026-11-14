@@ -1,5 +1,7 @@
 use std::{fmt, ops::Range, str::FromStr};
 
+use tower_lsp::lsp_types::Location;
+
 pub enum QMLBasicType {
     Int,
     Real,
@@ -47,6 +49,7 @@ pub struct QMLComponent {
     pub qml_name: Option<String>,
     pub prototype: Option<String>,
     pub module: Option<String>,
+    pub location: Option<Location>,
 
     pub properties: Vec<QMLProperty>,
     pub signals: Vec<QMLSignal>,

@@ -26,4 +26,5 @@ cargo run --bin qt_docs_scraper
 
 ## TODO
 
-- [ ] Implement QML value types scraping (QFont)
+- [ ] QML value types scraping (QFont)
+- [ ] Methods and signals scraping and resolution

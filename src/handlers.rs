@@ -2,6 +2,7 @@ mod completion;
 mod document_symbol;
 mod hover;
 mod resolver;
+mod workspace_symbol;
 
 use serde::Deserialize;
 use std::{collections::HashMap, sync::LazyLock};
@@ -9,6 +10,7 @@ use std::{collections::HashMap, sync::LazyLock};
 pub use completion::completion;
 pub use document_symbol::document_symbol;
 pub use hover::hover;
+pub use workspace_symbol::workspace_symbol;
 
 #[derive(Deserialize)]
 struct QtComponentDocs {

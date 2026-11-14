@@ -6,6 +6,7 @@ use std::{
 };
 
 use tokio::fs;
+use tower_lsp::lsp_types::{Location, Position, Range, Url};
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator};
 
 use crate::{
@@ -170,6 +171,8 @@ impl ComponentRegistry {
     pub fn parse_qml_file(source: &str, file_path: &Path, root_path: &Path) -> Vec<QMLComponent> {
         let mut components = Vec::new();
 
+        let file_url = Url::from_file_path(file_path).ok();
+
         let file_name = file_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -215,11 +218,17 @@ impl ComponentRegistry {
                 .map(|init| Self::extract_properties(init, text_bytes))
                 .unwrap_or_default();
 
+            let location = file_url.clone().map(|uri| Location {
+                uri,
+                range: node_to_lsp_range(root_object),
+            });
+
             let component = QMLComponent {
                 cpp_name: file_name.to_string(),
                 qml_name: Some(file_name.to_string()),
                 prototype,
                 module: Some(module_name.clone()),
+                location,
                 properties,
                 signals: vec![],
                 methods: vec![],
@@ -253,11 +262,17 @@ impl ComponentRegistry {
 
                 let composite_name = format!("{}.{}", file_name, name);
 
+                let location = file_url.clone().map(|uri| Location {
+                    uri,
+                    range: node_to_lsp_range(node),
+                });
+
                 let component = QMLComponent {
                     cpp_name: composite_name.clone(),
                     qml_name: Some(composite_name.to_string()),
                     prototype,
                     module: Some(module_name.clone()),
+                    location,
                     properties,
                     signals: vec![],
                     methods: vec![],
@@ -315,6 +330,7 @@ impl ComponentRegistry {
             prototype,
             qml_name,
             module,
+            location: None,
 
             properties,
             signals: vec![],
@@ -435,5 +451,20 @@ impl ComponentRegistry {
             (Some(name), None) => (Some(name.to_string()), None),
             _ => (None, None),
         }
+    }
+}
+
+fn node_to_lsp_range(node: Node) -> Range {
+    let start = node.start_position();
+    let end = node.end_position();
+    Range {
+        start: Position {
+            line: start.row as u32,
+            character: start.column as u32,
+        },
+        end: Position {
+            line: end.row as u32,
+            character: end.column as u32,
+        },
     }
 }

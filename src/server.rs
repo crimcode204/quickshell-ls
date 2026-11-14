@@ -65,6 +65,7 @@ impl LanguageServer for QuickshellLanguageServer {
                     completion_item: None,
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 position_encoding: Some(PositionEncodingKind::UTF8),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
@@ -329,5 +330,16 @@ impl LanguageServer for QuickshellLanguageServer {
         } else {
             Ok(None)
         }
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        if let Ok(registry) = self.registry.read() {
+            return Ok(handlers::workspace_symbol(&params.query, &registry));
+        }
+
+        Ok(None)
     }
 }
