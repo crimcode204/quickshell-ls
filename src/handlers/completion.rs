@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionResponse, Documentation, MarkupContent,
     MarkupKind, Position,
@@ -88,8 +90,19 @@ fn detect_context<'a>(
         return Some(CompletionContext::MemberAccess(base_node));
     }
 
-    let mut current = Some(doc_state.node_at(position)?);
+    let probe_pos = Position {
+        line: position.line,
+        character: position.character.saturating_sub(1),
+    };
 
+    let Some(start_node) = doc_state
+        .node_at(probe_pos)
+        .or_else(|| doc_state.node_at(position))
+    else {
+        return Some(CompletionContext::TopLevel);
+    };
+
+    let mut current = Some(start_node);
     while let Some(node) = current {
         match node.kind() {
             ts_kinds::UI_BINDING => {
@@ -148,11 +161,11 @@ fn find_member_base_node<'a>(
     if byte_offset >= 2 {
         let slice = doc_state.text.byte_slice(0..byte_offset).to_string();
 
-        let target_byte = slice
+        let before_dot = slice
             .trim_end_matches(|c: char| c.is_alphabetic() || c == '_')
             .strip_suffix('.')?
-            .len()
-            .saturating_sub(1);
+            .len();
+        let target_byte = before_dot.saturating_sub(1);
         let line = doc_state.text.line_of_byte(target_byte);
         let col = target_byte - doc_state.text.byte_of_line(line);
         let point = Point::new(line, col);
@@ -163,6 +176,7 @@ fn find_member_base_node<'a>(
             .named_descendant_for_point_range(point, point)?;
 
         if let Some(parent) = base_candidate.parent()
+            && parent.end_byte() <= before_dot
             && matches!(
                 parent.kind(),
                 ts_kinds::MEMBER_EXPRESSION | ts_kinds::NESTED_IDENTIFIER
@@ -213,7 +227,7 @@ fn collect_component_items<'a>(
     let local_prefix = format!("{}.", doc_state.name);
 
     registry.components().filter_map(move |comp| {
-        let name = comp.name();
+        let name = comp.qml_name.as_deref()?;
 
         let display_name = if let Some(stripped) = name.strip_prefix(&local_prefix) {
             stripped

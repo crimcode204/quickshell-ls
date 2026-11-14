@@ -174,18 +174,9 @@ pub fn resolve_expression<'a>(
                     return resolve_member_access(object_node, &name, doc_state, registry);
                 }
 
-                let binding_node = if parent.kind() == ts_kinds::NESTED_IDENTIFIER {
-                    parent.parent()
-                } else {
-                    Some(parent)
-                };
-
-                if let Some(binding) = binding_node
-                    && matches!(binding.kind(), ts_kinds::UI_BINDING | ts_kinds::UI_PROPERTY)
+                if matches!(parent.kind(), ts_kinds::UI_BINDING | ts_kinds::UI_PROPERTY)
                     && let Some(name_node) = parent.child_by_field_name("name")
-                    && (name_node.id() == node.id()
-                        || (parent.kind() == ts_kinds::NESTED_IDENTIFIER
-                            && name_node.id() == parent.id()))
+                    && name_node.id() == node.id()
                 {
                     return resolve_property_in_scope(
                         node.start_byte(),
