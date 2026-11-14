@@ -292,21 +292,6 @@ impl LanguageServer for QuickshellLanguageServer {
         });
     }
 
-    //     async fn document_symbol(
-    //         &self,
-    //         params: DocumentSymbolParams,
-    //     ) -> Result<Option<DocumentSymbolResponse>> {
-    //         let uri = params.text_document.uri;
-    //
-    //         if let Some(doc_state) = self.documents.get(&uri) {
-    //             let lsp_symbols = doc_state.symbols.iter().map(DocumentSymbol::from).collect();
-    //
-    //             Ok(Some(DocumentSymbolResponse::Nested(lsp_symbols)))
-    //         } else {
-    //             Ok(None)
-    //         }
-    //     }
-
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
@@ -331,5 +316,18 @@ impl LanguageServer for QuickshellLanguageServer {
         }
 
         Ok(None)
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+
+        if let Some(doc_state) = self.documents.get(&uri) {
+            return Ok(handlers::document_symbol(&doc_state));
+        } else {
+            Ok(None)
+        }
     }
 }

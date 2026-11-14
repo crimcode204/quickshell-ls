@@ -70,7 +70,7 @@ impl ComponentRegistry {
         if let Some(comp) = self.components.remove(name) {
             self.cpp_to_qml.remove(&comp.cpp_name);
         }
-        let inline_prefix = format!("{}", name);
+        let inline_prefix = format!("{}.", name);
         self.components.retain(|name, comp| {
             if name.starts_with(&inline_prefix) {
                 self.cpp_to_qml.remove(&comp.cpp_name);
@@ -337,6 +337,7 @@ impl ComponentRegistry {
             } else {
                 crate::qml::QMLPropertyModifier::None
             },
+            byte_range: None,
         })
     }
 
@@ -374,6 +375,7 @@ impl ComponentRegistry {
                 name,
                 p_type: type_name.into(),
                 modifier,
+                byte_range: Some(child.byte_range()),
             });
         });
 

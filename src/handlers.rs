@@ -1,4 +1,5 @@
 mod completion;
+mod document_symbol;
 mod hover;
 mod resolver;
 
@@ -6,6 +7,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, sync::LazyLock};
 
 pub use completion::completion;
+pub use document_symbol::document_symbol;
 pub use hover::hover;
 
 #[derive(Deserialize)]

@@ -1,5 +1,5 @@
 use crop::Rope;
-use tower_lsp::lsp_types::TextDocumentContentChangeEvent;
+use tower_lsp::lsp_types::{Position, TextDocumentContentChangeEvent};
 
 pub use crate::doc_state::local_instance::LocalInstance;
 
@@ -115,5 +115,30 @@ impl DocState {
         let line = (position.line as usize).min(self.text.line_len().saturating_sub(1));
         let line_byte = self.text.byte_of_line(line);
         (line_byte + position.character as usize).min(self.text.byte_len())
+    }
+
+    pub fn byte_range_to_lsp_range(
+        &self,
+        range: &std::ops::Range<usize>,
+    ) -> tower_lsp::lsp_types::Range {
+        let start_byte = range.start.min(self.text.byte_len());
+        let end_byte = range.end.min(self.text.byte_len());
+
+        let start_line = self.text.line_of_byte(start_byte);
+        let start_col = start_byte - self.text.byte_of_line(start_line);
+
+        let end_line = self.text.line_of_byte(end_byte);
+        let end_col = end_byte - self.text.byte_of_line(end_line);
+
+        tower_lsp::lsp_types::Range {
+            start: Position {
+                line: start_line as u32,
+                character: start_col as u32,
+            },
+            end: Position {
+                line: end_line as u32,
+                character: end_col as u32,
+            },
+        }
     }
 }

@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{fmt, ops::Range, str::FromStr};
 
 pub enum QMLBasicType {
     Int,
@@ -26,6 +26,7 @@ pub struct QMLProperty {
     pub name: String,
     pub p_type: QMLPropertyType,
     pub modifier: QMLPropertyModifier,
+    pub byte_range: Option<Range<usize>>,
 }
 
 pub struct QMLSignal {
