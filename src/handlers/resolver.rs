@@ -22,6 +22,26 @@ pub enum ExpressionMember<'a> {
     IdReference(&'a LocalInstance),
 }
 
+impl<'a> PartialEq for ExpressionMember<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::LocalProperty { property: p1, .. },
+                Self::LocalProperty { property: p2, .. },
+            ) => std::ptr::eq(*p1, *p2),
+            (
+                Self::GlobalProperty { property: p1, .. },
+                Self::GlobalProperty { property: p2, .. },
+            ) => std::ptr::eq(*p1, *p2),
+            (Self::Component(c1), Self::Component(c2)) => std::ptr::eq(*c1, *c2),
+            (Self::IdReference(i1), Self::IdReference(i2)) => std::ptr::eq(*i1, *i2),
+            _ => false,
+        }
+    }
+}
+
+impl<'a> Eq for ExpressionMember<'a> {}
+
 pub fn resolve_component<'a>(
     name: &str,
     doc_state: &DocState,
@@ -166,6 +186,14 @@ pub fn resolve_expression<'a>(
             let name = doc_state.node_text(&node);
 
             if let Some(parent) = node.parent() {
+                if parent.kind() == ts_kinds::UI_INLINE_COMPONENT
+                    && let Some(name_node) = parent.child_by_field_name("name")
+                    && name_node.id() == node.id()
+                    && let Some(comp) = resolve_component(&name, doc_state, registry)
+                {
+                    return Some(ExpressionMember::Component(comp));
+                }
+
                 if parent.kind() == ts_kinds::NESTED_IDENTIFIER
                     && let Some(right_node) = parent.child(2)
                     && right_node.id() == node.id()
@@ -429,4 +457,33 @@ pub fn collect_all_ids<'a>(doc_state: &'a DocState) -> Vec<(&'a str, &'a str)> {
     let mut ids = Vec::new();
     walk(&doc_state.instances, &mut ids);
     ids
+}
+
+pub fn find_all_references_in_doc<'a>(
+    target_node: Node<'a>,
+    doc_state: &'a DocState,
+    registry: &'a ComponentRegistry,
+) -> Option<(ExpressionMember<'a>, Vec<Node<'a>>)> {
+    let target_member = resolve_expression(target_node, doc_state, registry)?;
+    let target_text = doc_state.node_text(&target_node);
+
+    let mut matches = Vec::new();
+    let mut stack = vec![doc_state.tree.root_node()];
+    let mut cursor = doc_state.tree.walk();
+
+    while let Some(node) = stack.pop() {
+        if matches!(
+            node.kind(),
+            ts_kinds::IDENTIFIER | ts_kinds::TYPE_IDENTIFIER | ts_kinds::PROPERTY_IDENTIFIER
+        ) && doc_state.node_text(&node) == target_text
+            && resolve_expression(node, doc_state, registry).as_ref() == Some(&target_member)
+        {
+            matches.push(node);
+        }
+
+        node.children(&mut cursor)
+            .for_each(|child| stack.push(child));
+    }
+
+    Some((target_member, matches))
 }
