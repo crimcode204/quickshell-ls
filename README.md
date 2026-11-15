@@ -15,14 +15,17 @@ cargo run --bin qt_docs_scraper
 
 ## Capabilities
 
-- [x] Document Synchronization
 - [x] Hover
-- [ ] Go to definition
-- [ ] Formatting
-- [ ] Diagnostics
-- [ ] Signature help
 - [x] Completions
-- [ ] Rename
+- [x] Document symbols
+- [x] Workspace symbols
+- [x] Go to definition
+- [x] Document highlight
+- [x] Rename
+- [ ] Diagnostics
+- [ ] Semantic tokens
+- [ ] Formatting
+- [ ] Signature help
 
 ## TODO
 
