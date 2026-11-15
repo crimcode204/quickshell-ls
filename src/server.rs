@@ -32,6 +32,32 @@ impl QuickshellLanguageServer {
             root_path: OnceLock::new(),
         }
     }
+
+    fn refresh_document_components(&self, uri: &Url, doc_state: &DocState) {
+        if let Ok(file_path) = uri.to_file_path()
+            && file_path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.chars().next().is_some_and(|c| c.is_uppercase()))
+            && let Some(root_path) = self.root_path.get()
+        {
+            let text = doc_state.text.to_string();
+            let components = ComponentRegistry::extract_qml_file_components(
+                doc_state.tree.root_node(),
+                text.as_bytes(),
+                &file_path,
+                root_path,
+            );
+            // Can optimize: check which components actually change under a read lock
+            // Only update those ones under a write lock
+            if let Ok(mut registry) = self.registry.write() {
+                registry.remove_component(&doc_state.name);
+                components
+                    .into_iter()
+                    .for_each(|comp| registry.add_component(comp));
+            }
+        }
+    }
 }
 
 #[tower_lsp::async_trait]
@@ -187,41 +213,33 @@ impl LanguageServer for QuickshellLanguageServer {
             .and_then(|path| path.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_default();
 
-        if let Ok(mut parser) = self.parser.lock() {
-            let doc_state = DocState::new(file_stem, text, &mut parser);
-            self.documents.insert(uri, doc_state);
-        }
+        let Ok(doc_state) = self
+            .parser
+            .lock()
+            .map(|mut parser| DocState::new(file_stem, text, &mut parser))
+        else {
+            return;
+        };
+
+        self.refresh_document_components(&uri, &doc_state);
+        self.documents.insert(uri, doc_state);
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        if let Some(mut doc_state) = self.documents.get_mut(&uri)
-            && let Ok(mut parser) = self.parser.lock()
-        {
-            doc_state.update(params.content_changes, &mut parser);
+        if let Some(mut doc_state) = self.documents.get_mut(&uri) {
+            if let Ok(mut parser) = self.parser.lock() {
+                doc_state.update(params.content_changes, &mut parser);
+            }
+            self.refresh_document_components(&uri, &doc_state);
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
 
-        if let Some(doc_state) = self.documents.get(&uri)
-            && let Ok(file_path) = uri.to_file_path()
-            && let Some(root_path) = self.root_path.get()
-        {
-            let components = ComponentRegistry::parse_qml_file(
-                &doc_state.text.to_string(),
-                &file_path,
-                root_path,
-            );
-            if let Ok(mut registry) = self.registry.write() {
-                registry.remove_component(&doc_state.name);
-                components
-                    .into_iter()
-                    .for_each(|comp| registry.add_component(comp));
-            }
-        }
+        // Add qmllint diagnostics here later
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -234,7 +252,6 @@ impl LanguageServer for QuickshellLanguageServer {
             if let Ok(uri) = Url::parse(&file.uri)
                 && let Ok(path) = uri.to_file_path()
                 && path.extension().and_then(|ext| ext.to_str()) == Some("qml")
-                // First char is upper case
                 && path
                     .file_stem()
                     .and_then(|s| s.to_str())

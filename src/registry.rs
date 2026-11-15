@@ -169,6 +169,21 @@ impl ComponentRegistry {
     }
 
     pub fn parse_qml_file(source: &str, file_path: &Path, root_path: &Path) -> Vec<QMLComponent> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_qmljs::LANGUAGE.into())
+            .unwrap();
+
+        let tree = parser.parse(source, None).unwrap();
+        Self::extract_qml_file_components(tree.root_node(), source.as_bytes(), file_path, root_path)
+    }
+
+    pub fn extract_qml_file_components(
+        root_node: Node,
+        text_bytes: &[u8],
+        file_path: &Path,
+        root_path: &Path,
+    ) -> Vec<QMLComponent> {
         let mut components = Vec::new();
 
         let file_url = Url::from_file_path(file_path).ok();
@@ -191,15 +206,6 @@ impl ComponentRegistry {
             })
             .unwrap_or_else(|| "Local Project".to_string());
 
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_qmljs::LANGUAGE.into())
-            .unwrap();
-
-        let tree = parser.parse(source, None).unwrap();
-        let text_bytes = source.as_bytes();
-
-        let root_node = tree.root_node();
         let mut cursor = root_node.walk();
 
         // Main component
@@ -237,7 +243,7 @@ impl ComponentRegistry {
         }
 
         let mut nodes_to_visit = vec![root_node];
-        let mut cursor = tree.walk();
+        let mut cursor = root_node.walk();
 
         // Inline components
         while let Some(node) = nodes_to_visit.pop() {
