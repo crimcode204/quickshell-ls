@@ -3,6 +3,7 @@ mod document_symbol;
 mod goto_definition;
 mod highlight;
 mod hover;
+mod rename;
 mod resolver;
 mod workspace_symbol;
 
@@ -14,6 +15,7 @@ pub use document_symbol::document_symbol;
 pub use goto_definition::goto_definition;
 pub use highlight::document_highlight;
 pub use hover::hover;
+pub use rename::{prepare_rename, rename};
 pub use workspace_symbol::workspace_symbol;
 
 #[derive(Deserialize)]

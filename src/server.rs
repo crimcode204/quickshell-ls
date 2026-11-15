@@ -68,6 +68,10 @@ impl LanguageServer for QuickshellLanguageServer {
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 definition_provider: Some(OneOf::Left(true)),
                 document_highlight_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 position_encoding: Some(PositionEncodingKind::UTF8),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
@@ -375,6 +379,38 @@ impl LanguageServer for QuickshellLanguageServer {
         {
             return Ok(handlers::document_highlight(
                 position, &doc_state, &registry,
+            ));
+        }
+
+        Ok(None)
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        let uri = params.text_document.uri;
+        let position = params.position;
+
+        if let Some(doc_state) = self.documents.get(&uri)
+            && let Ok(registry) = self.registry.read()
+        {
+            return Ok(handlers::prepare_rename(position, &doc_state, &registry));
+        }
+
+        Ok(None)
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = params.new_name;
+
+        if let Some(doc_state) = self.documents.get(&uri)
+            && let Ok(registry) = self.registry.read()
+        {
+            return Ok(handlers::rename(
+                &uri, position, new_name, &doc_state, &registry,
             ));
         }
 
