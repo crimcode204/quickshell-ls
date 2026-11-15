@@ -17,7 +17,7 @@ fn instance_to_symbol(instance: &LocalInstance, doc_state: &DocState) -> Documen
     let range = doc_state.byte_range_to_lsp_range(&instance.byte_range);
 
     let prop_symbols = instance.properties.iter().filter_map(|prop| {
-        let prop_range = doc_state.byte_range_to_lsp_range(prop.byte_range.as_ref()?);
+        let prop_range = prop.range?;
         Some(DocumentSymbol {
             name: prop.name.clone(),
             detail: Some(format!("{}{}", prop.modifier, prop.p_type)),

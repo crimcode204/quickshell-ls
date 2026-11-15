@@ -1,4 +1,4 @@
-use tower_lsp::lsp_types::{SymbolInformation, SymbolKind};
+use tower_lsp::lsp_types::{Location, SymbolInformation, SymbolKind};
 
 use crate::registry::ComponentRegistry;
 
@@ -34,7 +34,10 @@ pub fn workspace_symbol(
                     kind: SymbolKind::PROPERTY,
                     tags: None,
                     deprecated: None,
-                    location: location.clone(),
+                    location: Location {
+                        uri: location.uri.clone(),
+                        range: prop.range.unwrap_or(location.range),
+                    },
                     container_name: Some(comp_name.to_string()),
                 });
             }

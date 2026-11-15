@@ -353,7 +353,7 @@ impl ComponentRegistry {
             } else {
                 crate::qml::QMLPropertyModifier::None
             },
-            byte_range: None,
+            range: None,
         })
     }
 
@@ -391,7 +391,7 @@ impl ComponentRegistry {
                 name,
                 p_type: type_name.into(),
                 modifier,
-                byte_range: Some(child.byte_range()),
+                range: Some(crate::qml::node_to_lsp_range(child)),
             });
         });
 

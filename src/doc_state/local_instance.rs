@@ -130,7 +130,7 @@ impl LocalInstance {
             name,
             p_type: type_name.into(),
             modifier,
-            byte_range: Some(node.byte_range()),
+            range: Some(crate::qml::node_to_lsp_range(node)),
         })
     }
 }

@@ -1,6 +1,7 @@
-use std::{fmt, ops::Range, str::FromStr};
+use std::{fmt, str::FromStr};
 
-use tower_lsp::lsp_types::Location;
+use tower_lsp::lsp_types::{Location, Position, Range};
+use tree_sitter::Node;
 
 pub enum QMLBasicType {
     Int,
@@ -28,7 +29,7 @@ pub struct QMLProperty {
     pub name: String,
     pub p_type: QMLPropertyType,
     pub modifier: QMLPropertyModifier,
-    pub byte_range: Option<Range<usize>>,
+    pub range: Option<Range>,
 }
 
 pub struct QMLSignal {
@@ -134,5 +135,20 @@ impl QMLComponent {
             Some(name) => name,
             None => &self.cpp_name,
         }
+    }
+}
+
+pub fn node_to_lsp_range(node: Node) -> Range {
+    let start = node.start_position();
+    let end = node.end_position();
+    Range {
+        start: Position {
+            line: start.row as u32,
+            character: start.column as u32,
+        },
+        end: Position {
+            line: end.row as u32,
+            character: end.column as u32,
+        },
     }
 }

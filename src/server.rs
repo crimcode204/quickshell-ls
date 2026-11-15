@@ -66,6 +66,7 @@ impl LanguageServer for QuickshellLanguageServer {
                 }),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 position_encoding: Some(PositionEncodingKind::UTF8),
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
@@ -338,6 +339,24 @@ impl LanguageServer for QuickshellLanguageServer {
     ) -> Result<Option<Vec<SymbolInformation>>> {
         if let Ok(registry) = self.registry.read() {
             return Ok(handlers::workspace_symbol(&params.query, &registry));
+        }
+
+        Ok(None)
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        if let Some(doc_state) = self.documents.get(&uri)
+            && let Ok(registry) = self.registry.read()
+        {
+            return Ok(handlers::goto_definition(
+                &uri, position, &doc_state, &registry,
+            ));
         }
 
         Ok(None)
