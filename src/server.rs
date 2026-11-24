@@ -122,6 +122,16 @@ impl LanguageServer for QuickshellLanguageServer {
                                 },
                             }],
                         }),
+                        will_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some(String::from("file")),
+                                pattern: FileOperationPattern {
+                                    glob: String::from("**/*.qml"),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: None,
+                                },
+                            }],
+                        }),
                         did_rename: Some(FileOperationRegistrationOptions {
                             filters: vec![FileOperationFilter {
                                 scheme: Some(String::from("file")),
@@ -239,6 +249,10 @@ impl LanguageServer for QuickshellLanguageServer {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
 
+        if let Some(doc_state) = self.documents.get_mut(&uri) {
+            self.refresh_document_components(&uri, &doc_state);
+        }
+
         // Add qmllint diagnostics here later
     }
 
@@ -271,6 +285,28 @@ impl LanguageServer for QuickshellLanguageServer {
         }
     }
 
+    async fn will_rename_files(&self, params: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        let renames: Vec<(String, String)> = params
+            .files
+            .iter()
+            .filter_map(|file| {
+                Some((
+                    qml_component_stem(&file.old_uri)?,
+                    qml_component_stem(&file.new_uri)?,
+                ))
+            })
+            .collect();
+
+        if let Ok(registry) = self.registry.read() {
+            return Ok(handlers::will_rename_files(
+                &renames,
+                &self.documents,
+                &registry,
+            ));
+        }
+        Ok(None)
+    }
+
     async fn did_rename_files(&self, params: RenameFilesParams) {
         for file in params.files {
             if let Ok(old_uri) = Url::parse(&file.old_uri)
@@ -279,6 +315,15 @@ impl LanguageServer for QuickshellLanguageServer {
                 && let Ok(mut registry) = self.registry.write()
             {
                 registry.remove_component(file_stem);
+
+                if let Some((_, mut doc_state)) = self.documents.remove(&old_uri)
+                    && let Ok(new_uri) = Url::parse(&file.new_uri)
+                    && let Ok(new_path) = new_uri.to_file_path()
+                    && let Some(new_stem) = new_path.file_stem().and_then(|s| s.to_str())
+                {
+                    doc_state.name = new_stem.to_string();
+                    self.documents.insert(new_uri, doc_state);
+                }
             }
 
             if let Ok(new_uri) = Url::parse(&file.new_uri)
@@ -423,14 +468,54 @@ impl LanguageServer for QuickshellLanguageServer {
         let position = params.text_document_position.position;
         let new_name = params.new_name;
 
-        if let Some(doc_state) = self.documents.get(&uri)
-            && let Ok(registry) = self.registry.read()
+        let result = {
+            let Some(doc_state) = self.documents.get(&uri) else {
+                return Ok(None);
+            };
+            let Ok(registry) = self.registry.read() else {
+                return Ok(None);
+            };
+            handlers::rename(
+                &uri,
+                position,
+                new_name,
+                &doc_state,
+                &self.documents,
+                &registry,
+            )
+        };
+
+        let Some((edit, sync)) = result else {
+            return Ok(None);
+        };
+
+        if let Some(sync) = sync
+            && let Ok(mut registry) = self.registry.write()
         {
-            return Ok(handlers::rename(
-                &uri, position, new_name, &doc_state, &registry,
-            ));
+            match sync {
+                handlers::RegistrySync::Property {
+                    comp_name,
+                    old_name,
+                    new_name,
+                } => registry.rename_property(&comp_name, &old_name, &new_name),
+                handlers::RegistrySync::InlineComponent { old_name, new_name } => {
+                    registry.rename_inline_component(&old_name, &new_name)
+                }
+            }
         }
 
-        Ok(None)
+        Ok(Some(edit))
     }
+}
+
+fn qml_component_stem(uri_str: &str) -> Option<String> {
+    let path = Url::parse(uri_str).ok()?.to_file_path().ok()?;
+    if path.extension().and_then(|e| e.to_str()) != Some("qml") {
+        return None;
+    }
+    let stem = path.file_stem()?.to_str()?;
+    stem.chars()
+        .next()
+        .is_some_and(|c| c.is_uppercase())
+        .then(|| stem.to_string())
 }

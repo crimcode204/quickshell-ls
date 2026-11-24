@@ -33,6 +33,28 @@ impl<'a> PartialEq for ExpressionMember<'a> {
                 Self::GlobalProperty { property: p1, .. },
                 Self::GlobalProperty { property: p2, .. },
             ) => std::ptr::eq(*p1, *p2),
+            (
+                Self::LocalProperty {
+                    property: lp,
+                    instance,
+                },
+                Self::GlobalProperty {
+                    property: gp,
+                    component,
+                },
+            )
+            | (
+                Self::GlobalProperty {
+                    property: gp,
+                    component,
+                },
+                Self::LocalProperty {
+                    property: lp,
+                    instance,
+                },
+            ) => {
+                lp.name == gp.name && instance.registered_name.as_deref() == Some(component.name())
+            }
             (Self::Component(c1), Self::Component(c2)) => std::ptr::eq(*c1, *c2),
             (Self::IdReference(i1), Self::IdReference(i2)) => std::ptr::eq(*i1, *i2),
             _ => false,
@@ -466,7 +488,16 @@ pub fn find_all_references_in_doc<'a>(
 ) -> Option<(ExpressionMember<'a>, Vec<Node<'a>>)> {
     let target_member = resolve_expression(target_node, doc_state, registry)?;
     let target_text = doc_state.node_text(&target_node);
+    let matches = find_member_references_in_doc(&target_member, &target_text, doc_state, registry);
+    Some((target_member, matches))
+}
 
+pub fn find_member_references_in_doc<'a>(
+    target_member: &ExpressionMember,
+    target_text: &str,
+    doc_state: &'a DocState,
+    registry: &'a ComponentRegistry,
+) -> Vec<Node<'a>> {
     let mut matches = Vec::new();
     let mut stack = vec![doc_state.tree.root_node()];
     let mut cursor = doc_state.tree.walk();
@@ -485,5 +516,5 @@ pub fn find_all_references_in_doc<'a>(
             .for_each(|child| stack.push(child));
     }
 
-    Some((target_member, matches))
+    matches
 }

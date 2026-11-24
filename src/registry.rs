@@ -82,6 +82,30 @@ impl ComponentRegistry {
         });
     }
 
+    pub fn rename_property(&mut self, comp_name: &str, old_prop_name: &str, new_prop_name: &str) {
+        if let Some(comp) = self.components.get_mut(comp_name)
+            && let Some(prop) = comp.properties.iter_mut().find(|p| p.name == old_prop_name)
+        {
+            prop.name = new_prop_name.to_string();
+        }
+    }
+
+    pub fn rename_inline_component(&mut self, old_composite_name: &str, new_short_name: &str) {
+        let Some((file_prefix, _)) = old_composite_name.split_once('.') else {
+            return;
+        };
+        let new_composite = format!("{}.{}", file_prefix, new_short_name);
+
+        if let Some(mut comp) = self.components.remove(old_composite_name) {
+            self.cpp_to_qml.remove(&comp.cpp_name);
+            comp.cpp_name = new_composite.clone();
+            comp.qml_name = Some(new_composite.clone());
+            self.cpp_to_qml
+                .insert(comp.cpp_name.clone(), new_composite.clone());
+            self.components.insert(new_composite, comp);
+        }
+    }
+
     pub fn resolve_by_cpp_name(&self, cpp_name: &str) -> Option<&QMLComponent> {
         if let Some(translated_qml_name) = self.cpp_to_qml.get(cpp_name) {
             return self.components.get(translated_qml_name);

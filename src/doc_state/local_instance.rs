@@ -9,6 +9,7 @@ use crate::{
 pub struct LocalInstance {
     pub(crate) byte_range: Range<usize>,
     pub(crate) type_name: String,
+    pub(crate) registered_name: Option<String>,
     pub(crate) id: Option<String>,
     pub(crate) properties: Vec<QMLProperty>,
     pub(crate) children: Vec<LocalInstance>,
@@ -16,6 +17,15 @@ pub struct LocalInstance {
 
 impl LocalInstance {
     pub fn build_tree(node: Node, source: &[u8], doc_name: Option<&str>) -> Vec<LocalInstance> {
+        Self::build_tree_inner(node, source, doc_name, true)
+    }
+
+    fn build_tree_inner(
+        node: Node,
+        source: &[u8],
+        doc_name: Option<&str>,
+        is_root: bool,
+    ) -> Vec<LocalInstance> {
         let mut instances = Vec::new();
         let mut cursor = node.walk();
 
@@ -23,22 +33,29 @@ impl LocalInstance {
             if child.kind() == ts_kinds::UI_OBJECT_DEFINITION
                 || child.kind() == ts_kinds::UI_INLINE_COMPONENT
             {
-                instances.push(Self::parse_object(child, source, doc_name));
+                instances.push(Self::parse_object(child, source, doc_name, is_root));
             } else {
-                instances.append(&mut Self::build_tree(child, source, None));
+                instances.append(&mut Self::build_tree_inner(child, source, doc_name, false));
             }
         }
 
         instances
     }
 
-    fn parse_object(node: Node, source: &[u8], doc_name: Option<&str>) -> LocalInstance {
-        let type_name = if node.kind() == ts_kinds::UI_INLINE_COMPONENT {
+    fn parse_object(
+        node: Node,
+        source: &[u8],
+        doc_name: Option<&str>,
+        is_root: bool,
+    ) -> LocalInstance {
+        let is_inline = node.kind() == ts_kinds::UI_INLINE_COMPONENT;
+
+        let type_name = if is_inline {
             node.child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source).ok())
                 .unwrap_or("Item")
                 .to_string()
-        } else if let Some(name) = doc_name {
+        } else if is_root && let Some(name) = doc_name {
             name.to_string()
         } else {
             node.child_by_field_name("type_name")
@@ -47,7 +64,15 @@ impl LocalInstance {
                 .to_string()
         };
 
-        let target_node = if node.kind() == ts_kinds::UI_INLINE_COMPONENT {
+        let registered_name = if is_inline {
+            doc_name.map(|doc| format!("{}.{}", doc, type_name))
+        } else if is_root {
+            doc_name.map(String::from)
+        } else {
+            None
+        };
+
+        let target_node = if is_inline {
             node.child_by_field_name("component").unwrap_or(node)
         } else {
             node
@@ -72,8 +97,8 @@ impl LocalInstance {
                             properties.push(prop);
                         }
                     }
-                    ts_kinds::UI_OBJECT_DEFINITION => {
-                        children.push(Self::parse_object(item, source, None));
+                    ts_kinds::UI_OBJECT_DEFINITION | ts_kinds::UI_INLINE_COMPONENT => {
+                        children.push(Self::parse_object(item, source, doc_name, false));
                     }
                     ts_kinds::UI_BINDING => {
                         if let Some(name_node) = item.child_by_field_name("name") {
@@ -87,10 +112,10 @@ impl LocalInstance {
                             }
                         }
 
-                        children.append(&mut Self::build_tree(item, source, None));
+                        children.append(&mut Self::build_tree_inner(item, source, doc_name, false));
                     }
                     _ => {
-                        children.append(&mut Self::build_tree(item, source, None));
+                        children.append(&mut Self::build_tree_inner(item, source, doc_name, false));
                     }
                 }
             }
@@ -99,6 +124,7 @@ impl LocalInstance {
         LocalInstance {
             byte_range,
             type_name,
+            registered_name,
             id,
             properties,
             children,

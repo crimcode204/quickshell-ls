@@ -15,7 +15,7 @@ pub use document_symbol::document_symbol;
 pub use goto_definition::goto_definition;
 pub use highlight::document_highlight;
 pub use hover::hover;
-pub use rename::{prepare_rename, rename};
+pub use rename::{RegistrySync, prepare_rename, rename, will_rename_files};
 pub use workspace_symbol::workspace_symbol;
 
 #[derive(Deserialize)]
